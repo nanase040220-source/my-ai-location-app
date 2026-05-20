@@ -18,6 +18,7 @@ templates = Jinja2Templates(directory="templates")
 # 🔑 各種APIキーの取得
 gemini_key = os.environ.get("GEMINI_API_KEY")
 groq_key = os.environ.get("GROQ_API_KEY")
+yahoo_client_id = os.environ.get("YAHOO_CLIENT_ID")  # 🔥 追加：Yahoo!のアプリケーションID
 
 # Google Gemini クライアント初期化
 try:
@@ -29,20 +30,20 @@ except Exception as e:
     print(f"Gemini Init Error: {e}")
     gemini_client = None
 
-# 🔥 精度向上のための新しいプロンプト（指示をより具体的に）
+# 🔥 精度向上のためのプロンプト
 PROMPT = (
     "Analyze this image and pinpoint the exact location or landmark.\n"
     "Create the best possible map search query. It should be specific (e.g., 'Tokyo Skytree' instead of just 'Skytree'). "
     "If it is a specific building, monument, or natural feature, use its official name.\n\n"
     "You MUST respond ONLY in the following JSON format. Do not include any other text:\n"
     "{\n"
-    "  \"reason\": \"画像に写っている特徴（建物、看板、景色など）から、なぜその場所だと判断したのかのロジックを日本語で詳細に説明してください。\",\n"
+    "  \"reason\": \"画像に写っている特徴から、なぜその場所だと判断したのかのロジックを日本語で詳細に説明してください。\",\n"
     "  \"search_query\": \"Official Landmark Name, City, Country\"\n"
     "}"
 )
 
 async def ask_gemini_for_query(image_bytes: bytes):
-    """メインAI: Google Gemini 2.5 Flash (JSON構造化)"""
+    """メインAI: Google Gemini 2.5 Flash"""
     if not gemini_client:
         raise Exception("Gemini API Key is missing.")
     
@@ -101,56 +102,75 @@ async def ask_groq_for_query(image_bytes: bytes):
         return res_json["choices"][0]["message"]["content"]
 
 async def search_map(query: str):
-    """地図検索エンジン（精度を高めるためにクエリ調整機能を追加）"""
-    # AIが返してきたクエリから不要な記号を削る
+    """🔥 高精度：Yahoo! JAPAN Web API (ローカル検索) を使用した日本国内に強い地図検索"""
     clean_query = query.replace('"', '').replace('"', '').strip()
-    encoded_query = urllib.parse.quote(clean_query)
     
-    url = f"https://photon.komoot.io/api/?q={encoded_query}&limit=3"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "ja,en;q=0.9"
-    }
+    # Yahoo!のキーがない場合は、以前の無料Photon APIで代替検索する安全設計
+    if not yahoo_client_id:
+        print("YAHOO_CLIENT_IDが設定されていないため、Photon APIで代替検索します。")
+        return await search_map_photon_fallback(clean_query)
+        
+    encoded_query = urllib.parse.quote(clean_query)
+    # Yahoo!ローカル検索API (カセット「landmark,address」を指定して高精度化)
+    url = f"https://map.yahooapis.jp/search/local/V1/localSearch?appid={yahoo_client_id}&query={encoded_query}&output=json&results=1"
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers, timeout=10.0)
+            response = await client.get(url, timeout=10.0)
             if response.status_code != 200:
-                return {"found": False, "message": "地図サーバーが応答しませんでした。"}
-            
+                print(f"Yahoo API エラー: {response.status_code}")
+                return await search_map_photon_fallback(clean_query)
+                
             data = response.json()
-            features = data.get("features", [])
+            features = data.get("Feature", [])
             
             if features:
-                # 複数ヒットした場合は、最も信頼度の高そうな最初の候補を採用
                 first_result = features[0]
-                geometry = first_result.get("geometry", {})
-                coordinates = geometry.get("coordinates", [0.0, 0.0])
-                properties = first_result.get("properties", {})
+                name = first_result.get("Name", clean_query)
+                geometry = first_result.get("Geometry", {})
+                # Yahooの座標は「経度,緯度」の文字列で返ってくるためパースします
+                coordinates_str = geometry.get("Coordinates", "0.0,0.0")
+                lng_str, lat_str = coordinates_str.split(",")
                 
-                # ユーザーに見せる住所情報をきれいに整形
-                name = properties.get("name", "")
-                city = properties.get("city", properties.get("state", ""))
-                country = properties.get("country", "")
+                property_data = first_result.get("Property", {})
+                address = property_data.get("Address", "")
                 
-                parts = [p for p in [country, city, name] if p]
-                display_name = " ".join(parts)
+                display_name = f"{name} ({address})" if address else name
                 
                 return {
                     "found": True,
-                    "location": display_name if display_name else clean_query,
-                    "lat": float(coordinates[1]),
-                    "lng": float(coordinates[0])
+                    "location": display_name,
+                    "lat": float(lat_str), # 緯度
+                    "lng": float(lng_str)  # 経度
                 }
             
-            # 1度目でヒットしなかった場合、カンマで区切られた後ろの文字（国名など）を削って再検索（セカンドチャンス）
+            # カンマ区切りの後ろを削って再検索を試みる
             if "," in clean_query:
                 short_query = clean_query.split(",")[0].strip()
                 return await search_map(short_query)
                 
-            return {"found": False, "message": f"地図上で '{clean_query}' の詳細位置が特定できませんでした。"}
+            return {"found": False, "message": f"地図上で '{clean_query}' を特定できませんでした。"}
     except Exception as e:
-        return {"found": False, "message": f"地図検索エラー: {str(e)}"}
+        print(f"Yahoo検索中にエラー: {e}")
+        return await search_map_photon_fallback(clean_query)
+
+async def search_map_photon_fallback(query: str):
+    """Yahoo!が使えない時のための自動バックアップ検索（Photon）"""
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://photon.komoot.io/api/?q={encoded_query}&limit=1"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            data = response.json()
+            features = data.get("features", [])
+            if features:
+                coords = features[0].get("geometry", {}).get("coordinates", [0.0, 0.0])
+                props = features[0].get("properties", {})
+                display_name = " ".join([p for p in [props.get("country", ""), props.get("city", ""), props.get("name", "")] if p])
+                return {"found": True, "location": display_name if display_name else query, "lat": float(coords[1]), "lng": float(coords[0])}
+            return {"found": False, "message": f"地図上で '{query}' が見つかりませんでした。"}
+    except:
+        return {"found": False, "message": "地図検索サーバーが応答しませんでした。"}
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
@@ -188,7 +208,7 @@ async def analyze_image(file: UploadFile = File(...)):
     except Exception as parse_err:
         return {"success": False, "message": "AIデータの形式エラーが発生しました。"}
     
-    # 強化した地図検索を実行
+    # Yahoo!地図検索を実行
     map_res = await search_map(search_query)
     
     if map_res["found"]:
