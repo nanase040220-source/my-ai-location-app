@@ -81,9 +81,10 @@ async def ask_openai(image_bytes: bytes):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-@app.get("/", response_class=HTMLResponse)
+# 📝 これに書き換えます
+@app.route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request}))
 
 @app.post("/analyze")
 async def analyze_image(file: UploadFile = File(...)):
