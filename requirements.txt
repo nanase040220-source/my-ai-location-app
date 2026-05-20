@@ -4,3 +4,5 @@ jinja2
 python-multipart
 google-genai
 openai
+google-generativeai
+Pillow  # 画像を扱うために必要になる場合があります
