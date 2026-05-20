@@ -74,4 +74,131 @@ async def ask_groq_for_query(image_bytes: bytes):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {groq_key}",
-        "Content-Type": "application
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "llama-3.2-11b-vision-preview",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ]
+            }
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
+        response.raise_for_status()
+        res_json = response.json()
+        return res_json["choices"][0]["message"]["content"]
+
+async def search_map(query: str):
+    """無料かつ制限の緩い Photon 地図検索APIを使用（エラー対策）"""
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://photon.komoot.io/api/?q={encoded_query}&limit=1"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ja,en;q=0.9"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            
+            if response.status_code != 200:
+                print(f"地図APIエラー。ステータス: {response.status_code}")
+                return {"found": False, "message": "地図サーバーが応答しませんでした。"}
+            
+            data = response.json()
+            features = data.get("features", [])
+            
+            if features:
+                first_result = features[0]
+                geometry = first_result.get("geometry", {})
+                coordinates = geometry.get("coordinates", [0.0, 0.0])
+                properties = first_result.get("properties", {})
+                
+                # 表示用住所の組み立て
+                name = properties.get("name", "")
+                city = properties.get("city", "")
+                country = properties.get("country", "")
+                display_name = ", ".join([p for p in [name, city, country] if p])
+                
+                return {
+                    "found": True,
+                    "location": display_name if display_name else "不明な場所",
+                    "lat": float(coordinates[1]),
+                    "lng": float(coordinates[0])
+                }
+            return {"found": False, "message": f"地図上で '{query}' が見つかりませんでした。"}
+    except Exception as e:
+        print(f"地図検索中に例外発生: {str(e)}")
+        return {"found": False, "message": f"地図検索エラー: {str(e)}"}
+
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def read_index(request: Request):
+    if request.method == "HEAD":
+        return HTMLResponse(content="", status_code=200)
+    return templates.TemplateResponse(request=request, name="index.html")
+
+@app.post("/analyze")
+async def analyze_image(file: UploadFile = File(...)):
+    image_bytes = await file.read()
+    
+    ai_text_result = None
+    used_backup = False
+    
+    # 【AI自動切り替えロジック】
+    try:
+        print("メインAI (Gemini 2.5) で解析中...")
+        ai_text_result = await ask_gemini_for_query(image_bytes)
+        print("Geminiでの解析に成功しました。")
+    except Exception as e:
+        print(f"Geminiでエラーまたは混雑が発生しました: {e}")
+        
+        # Groqのキーが登録されている場合のみバックアップを起動
+        if groq_key:
+            print("バックアップAI (Groq: Llama3.2 Vision) に切り替えます...")
+            try:
+                ai_text_result = await ask_groq_for_query(image_bytes)
+                used_backup = True
+                print("Groqでの代替解析に成功しました！")
+            except Exception as e2:
+                print(f"バックアップAIでもエラーが発生しました: {e2}")
+                return {"success": False, "message": f"すべてのAI提供元が混雑しています。時間をおいて再度お試しください。({e2})"}
+        else:
+            return {"success": False, "message": f"メインAIが混雑しています。バックアップ用のGROQ_API_KEYが設定されていません。({e})"}
+            
+    # JSONパース（解析結果の読み込み）
+    try:
+        ai_data = json.loads(ai_text_result)
+        reason = ai_data.get("reason", "理由なし")
+        search_query = ai_data.get("search_query", "")
+        
+        if used_backup:
+            reason += "（※バックアップAIによる推測結果です）"
+    except Exception as parse_err:
+        print(f"JSONパースエラー。生データ: {ai_text_result}, エラー: {parse_err}")
+        return {"success": False, "message": "AIデータの読み込みに失敗しました。もう一度お試しください。"}
+    
+    # 地図検索
+    map_res = await search_map(search_query)
+    
+    if map_res["found"]:
+        return {
+            "success": True,
+            "reason": reason,
+            "query_used": search_query,
+            "location": map_res["location"],
+            "lat": map_res["lat"],
+            "lng": map_res["lng"]
+        }
+    else:
+        return {"success": False, "message": map_res["message"]}
