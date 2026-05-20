@@ -12,6 +12,15 @@
         h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
         .form-group { margin-bottom: 20px; }
         input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
+        
+        /* 🔥 追加：テキスト入力エリアのスタイル */
+        textarea { 
+            width: 100%; height: 80px; padding: 12px; border: 1px solid #cbd5e0; 
+            border-radius: 8px; box-sizing: border-box; resize: vertical;
+            font-family: inherit; font-size: 14px;
+        }
+        textarea:focus { border-color: #2b6cb0; outline: none; }
+
         button { 
             width: 100%; background: #2b6cb0; color: white; border: none; padding: 14px; 
             font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; 
@@ -34,16 +43,15 @@
         .prob-badge { font-weight: bold; padding: 2px 8px; border-radius: 12px; background: #edf2f7; color: #4a5568; }
         .rank-1 .prob-badge { background: #fed7d7; color: #9b2c2c; }
 
-        /* 🔥 ボタン配置用のスタイル */
         .btn-group { display: flex; gap: 8px; margin-top: 5px; }
         .verify-btn { 
             flex: 1; padding: 8px; font-size: 12px; font-weight: normal; background: #4a5568; text-align: center;
             color: white; text-decoration: none; border-radius: 4px; transition: background 0.2s;
         }
         .verify-btn:hover { background: #2d3748; }
-        .btn-img { background: #dd6b20; } /* 画像検索はオレンジ */
+        .btn-img { background: #dd6b20; } 
         .btn-img:hover { background: #c05621; }
-        .btn-sv { background: #319795; }  /* ストリートビューは緑 */
+        .btn-sv { background: #319795; }  
         .btn-sv:hover { background: #234e52; }
     </style>
 </head>
@@ -56,10 +64,15 @@
         <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真をアップロード：</label>
         <input type="file" id="imageInput" accept="image/*">
     </div>
+
+    <div class="form-group">
+        <label for="hintInput" style="font-weight: bold; display: block; margin-bottom: 8px;">追加情報・ヒント（任意）：</label>
+        <textarea id="hintInput" placeholder="例: 東京都内、近くに踏切がある、看板に『〇〇』と書いてある、など分かる情報を入力すると精度が上がります。"></textarea>
+    </div>
     
     <button id="uploadBtn">AIと地図で場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが複数の候補地と確率を算出中...</div>
+    <div class="loading" id="loadingText">⏳ AIが情報をもとに候補地を算出中...</div>
 
     <div id="resultArea" class="result-box">
         <h3 style="margin-top:0; color: #2b6cb0;">📍 予測・特定結果</h3>
@@ -75,6 +88,7 @@
 <script>
     document.addEventListener("DOMContentLoaded", () => {
         const imageInput = document.getElementById('imageInput');
+        const hintInput = document.getElementById('hintInput'); // 🔥 追加
         const uploadBtn = document.getElementById('uploadBtn');
         const loadingText = document.getElementById('loadingText');
         const resultArea = document.getElementById('resultArea');
@@ -114,6 +128,7 @@
 
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('hint', hintInput.value); // 🔥 テキストヒントをサーバーへ送る
 
             try {
                 const response = await fetch('/analyze', { method: 'POST', body: formData });
@@ -129,7 +144,7 @@
                 if (map === null) {
                     map = L.map('map');
                     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        attribution: '&copy; OpenStreetMap contributors'
+                        attribution: '© OpenStreetMap contributors'
                     }).addTo(map);
                 }
 
@@ -141,12 +156,10 @@
                 result.candidates.forEach((candidate, index) => {
                     const rank = index + 1;
                     
-                    // 🔥 Google画像検索とストリートビューのURLを生成
                     const encodedLocation = encodeURIComponent(candidate.location);
                     const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodedLocation}`;
                     const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${candidate.lat},${candidate.lng}`;
 
-                    // 1. リストの作成（ボタンを追加）
                     const li = document.createElement('li');
                     li.className = `candidate-item rank-${rank}`;
                     li.innerHTML = `
@@ -161,7 +174,6 @@
                     `;
                     candidateList.appendChild(li);
 
-                    // 2. ピン立て
                     const markerIcon = icons[index] || icons[1];
                     const marker = L.marker([candidate.lat, candidate.lng], { icon: markerIcon })
                         .addTo(map)
