@@ -10,8 +10,11 @@ from openai import AsyncOpenAI
 
 app = FastAPI()
 
-# templatesフォルダ内のHTMLを読み込む設定
-templates = Jinja2Templates(directory="templates")
+# -------------------------------------------------------------
+# 修正箇所：フォルダの場所を絶対パスで確実に指定する
+# -------------------------------------------------------------
+current_dir = os.path.dirname(os.path.abspath(__file__))
+templates = Jinja2Templates(directory=os.path.join(current_dir, "templates"))
 
 # 環境変数から各AIのAPIキーを取得
 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
