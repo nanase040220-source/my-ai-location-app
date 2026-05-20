@@ -21,6 +21,19 @@
         .loading { text-align: center; color: #718096; display: none; margin-top: 15px; font-weight: bold; }
         .result-box { margin-top: 25px; padding: 20px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
         #map { height: 350px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #cbd5e0; }
+        
+        /* 確率表示リスト用のおしゃれなスタイル */
+        .candidate-list { list-style: none; padding: 0; margin: 15px 0; }
+        .candidate-item { 
+            padding: 10px 15px; margin-bottom: 8px; border-radius: 6px; 
+            background: white; border-left: 5px solid #cbd5e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .rank-1 { border-left-color: #e53e3e; } /* 1位は赤 */
+        .rank-2 { border-left-color: #3182ce; } /* 2位は青 */
+        .rank-3 { border-left-color: #38a169; } /* 3位は緑 */
+        .prob-badge { font-weight: bold; padding: 2px 8px; border-radius: 12px; background: #edf2f7; color: #4a5568; }
+        .rank-1 .prob-badge { background: #fed7d7; color: #9b2c2c; }
     </style>
 </head>
 <body>
@@ -35,31 +48,48 @@
     
     <button id="uploadBtn">AIと地図で場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが解析＆地図を自動検索中...</div>
+    <div class="loading" id="loadingText">⏳ AIが複数の候補地と確率を算出中...</div>
 
     <div id="resultArea" class="result-box">
-        <h3 style="margin-top:0; color: #2b6cb0;">📍 検索・特定結果</h3>
+        <h3 style="margin-top:0; color: #2b6cb0;">📍 予測・特定結果</h3>
         <p id="resReason"></p>
-        <p id="resQuery"></p>
-        <p id="resAddress" style="font-size: 0.9em; color: #4a5568;"></p>
+        
+        <h4 style="margin-bottom: 5px; color: #4a5568;">🗺️ 可能性のある場所リスト</h4>
+        <ul id="candidateList" class="candidate-list"></ul>
         
         <div id="map"></div>
     </div>
 </div>
 
 <script>
-    // 画面が完全に読み込まれてから処理を実行する安全対策を追加
     document.addEventListener("DOMContentLoaded", () => {
         const imageInput = document.getElementById('imageInput');
         const uploadBtn = document.getElementById('uploadBtn');
         const loadingText = document.getElementById('loadingText');
         const resultArea = document.getElementById('resultArea');
         const resReason = document.getElementById('resReason');
-        const resQuery = document.getElementById('resQuery');
-        const resAddress = document.getElementById('resAddress');
+        const candidateList = document.getElementById('candidateList');
         
         let map = null;
-        let marker = null;
+        let markersGroup = []; // 複数のピンを管理する配列
+
+        // ピンの色を変えるための共通関数（Leaflet標準のピンの色をフィルターで擬似変更）
+        function createIcon(colorFilter) {
+            return L.divIcon({
+                className: 'custom-pin',
+                html: `<img src="https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png" style="filter: ${colorFilter}; width: 25px; height: 41px; margin-left: -12px; margin-top: -41px;">`,
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34]
+            });
+        }
+
+        // 色違いピンの設定
+        const icons = [
+            createIcon("hue-rotate(140deg) brightness(0.9) contrast(1.2)"), // 1位: 赤っぽく
+            createIcon("none"),                                            // 2位: 青（デフォルト）
+            createIcon("hue-rotate(260deg) saturate(1.5)")                 // 3位: 緑っぽく
+        ];
 
         uploadBtn.addEventListener('click', async () => {
             const file = imageInput.files[0];
@@ -71,6 +101,7 @@
             uploadBtn.disabled = true;
             loadingText.style.display = 'block';
             resultArea.style.display = 'none';
+            candidateList.innerHTML = '';
 
             const formData = new FormData();
             formData.append('file', file);
@@ -84,22 +115,53 @@
                 }
 
                 resultArea.style.display = 'block';
-                resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
-                resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
-                resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
+                resReason.innerHTML = `<strong>AIの推理ロジック:</strong><br>${result.reason}`;
 
-                const lat = result.lat;
-                const lng = result.lng;
-
+                // 地図が未作成なら初期化
                 if (map === null) {
-                    map = L.map('map').setView([lat, lng], 14);
+                    map = L.map('map');
                     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                         attribution: '&copy; OpenStreetMap contributors'
                     }).addTo(map);
-                    marker = L.marker([lat, lng]).addTo(map);
-                } else {
-                    map.setView([lat, lng], 14);
-                    marker.setLatLng([lat, lng]);
+                }
+
+                // 過去のピンをすべて削除
+                markersGroup.forEach(m => map.removeLayer(m));
+                markersGroup = [];
+
+                const bounds = []; // 全ピンを収めるための範囲データ
+
+                // 戻ってきた候補地（最大3つ）をループ処理
+                result.candidates.forEach((candidate, index) => {
+                    const rank = index + 1;
+                    
+                    // 1. 画面のリストに表示を追加
+                    const li = document.createElement('li');
+                    li.className = `candidate-item rank-${rank}`;
+                    li.innerHTML = `
+                        <div><strong>第${rank}候補:</strong> ${candidate.location}</div>
+                        <span class="prob-badge">${candidate.probability}</span>
+                    `;
+                    candidateList.appendChild(li);
+
+                    // 2. 地図上にピンを立てる
+                    const markerIcon = icons[index] || icons[1]; // 色を割り当て
+                    const marker = L.marker([candidate.lat, candidate.lng], { icon: markerIcon })
+                        .addTo(map)
+                        .bindPopup(`<b>第${rank}候補</b><br>${candidate.location}<br>確率: ${candidate.probability}`);
+                    
+                    markersGroup.push(marker);
+                    bounds.push([candidate.lat, candidate.lng]);
+                    
+                    // 1位のピンは最初から吹き出しを開いておく
+                    if (index === 0) {
+                        marker.openPopup();
+                    }
+                });
+
+                // 3. すべてのピンが綺麗に見えるように地図の表示位置・ズームを自動調整
+                if (bounds.length > 0) {
+                    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
                 }
                 
                 setTimeout(() => { map.invalidateSize(); }, 200);
