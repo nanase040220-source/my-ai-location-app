@@ -20,7 +20,6 @@
         button:disabled { background: #cbd5e0; cursor: not-allowed; }
         .loading { text-align: center; color: #718096; display: none; margin-top: 15px; font-weight: bold; }
         .result-box { margin-top: 25px; padding: 20px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
-        /* 地図を表示するエリア */
         #map { height: 350px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #cbd5e0; }
     </style>
 </head>
@@ -49,71 +48,69 @@
 </div>
 
 <script>
-    const imageInput = document.getElementById('imageInput');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const loadingText = document.getElementById('loadingText');
-    const resultArea = document.getElementById('resultArea');
-    const resReason = document.getElementById('resReason');
-    const resQuery = document.getElementById('resQuery');
-    const resAddress = document.getElementById('resAddress');
-    
-    let map = null;
-    let marker = null;
+    // 画面が完全に読み込まれてから処理を実行する安全対策を追加
+    document.addEventListener("DOMContentLoaded", () => {
+        const imageInput = document.getElementById('imageInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const loadingText = document.getElementById('loadingText');
+        const resultArea = document.getElementById('resultArea');
+        const resReason = document.getElementById('resReason');
+        const resQuery = document.getElementById('resQuery');
+        const resAddress = document.getElementById('resAddress');
+        
+        let map = null;
+        let marker = null;
 
-    uploadBtn.addEventListener('click', async () => {
-        const file = imageInput.files[0];
-        if (!file) {
-            alert('写真を選択してください！');
-            return;
-        }
-
-        uploadBtn.disabled = true;
-        loadingText.style.display = 'block';
-        resultArea.style.display = 'none';
-
-        const formData = new FormData();
-        formData.append('file', file);
-
-        try {
-            const response = await fetch('/analyze', { method: 'POST', body: formData });
-            const result = await response.json();
-
-            if (!response.ok || !result.success) {
-                throw new Error(result.message || '解析に失敗しました。');
+        uploadBtn.addEventListener('click', async () => {
+            const file = imageInput.files[0];
+            if (!file) {
+                alert('写真を選択してください！');
+                return;
             }
 
-            // 結果を画面に表示
-            resultArea.style.display = 'block';
-            resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
-            resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
-            resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
+            uploadBtn.disabled = true;
+            loadingText.style.display = 'block';
+            resultArea.style.display = 'none';
 
-            // 地図の描画・更新
-            const lat = result.lat;
-            const lng = result.lng;
+            const formData = new FormData();
+            formData.append('file', file);
 
-            if (map === null) {
-                // 初回のみ地図オブジェクトを作成
-                map = L.map('map').setView([lat, lng], 14);
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '&copy; OpenStreetMap contributors'
-                }).addTo(map);
-                marker = L.marker([lat, lng]).addTo(map);
-            } else {
-                // 2回目以降は位置を移動させるだけ
-                map.setView([lat, lng], 14);
-                marker.setLatLng([lat, lng]);
+            try {
+                const response = await fetch('/analyze', { method: 'POST', body: formData });
+                const result = await response.json();
+
+                if (!response.ok || !result.success) {
+                    throw new Error(result.message || '解析に失敗しました。');
+                }
+
+                resultArea.style.display = 'block';
+                resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
+                resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
+                resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
+
+                const lat = result.lat;
+                const lng = result.lng;
+
+                if (map === null) {
+                    map = L.map('map').setView([lat, lng], 14);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; OpenStreetMap contributors'
+                    }).addTo(map);
+                    marker = L.marker([lat, lng]).addTo(map);
+                } else {
+                    map.setView([lat, lng], 14);
+                    marker.setLatLng([lat, lng]);
+                }
+                
+                setTimeout(() => { map.invalidateSize(); }, 200);
+
+            } catch (error) {
+                alert('エラー: ' + error.message);
+            } finally {
+                uploadBtn.disabled = false;
+                loadingText.style.display = 'none';
             }
-            
-            // 地図の表示崩れを防ぐおまじない
-            setTimeout(() => { map.invalidateSize(); }, 200);
-
-        } catch (error) {
-            alert('エラー: ' + error.message);
-        } finally {
-            uploadBtn.disabled = false;
-            loadingText.style.display = 'none';
-        }
+        });
     });
 </script>
 
