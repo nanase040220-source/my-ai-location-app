@@ -3,50 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Location Finder</title>
+    <title>AI & Map ハイブリッド検索</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; color: #333; }
-        .container { max-width: 600px; background: white; padding: 30px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .container { max-width: 700px; background: white; padding: 30px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
         .form-group { margin-bottom: 20px; }
-        input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; }
+        input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
         button { 
-            width: 100%; 
-            background: #4299e1; 
-            color: white; 
-            border: none; 
-            padding: 12px; 
-            font-size: 16px; 
-            font-weight: bold; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            transition: background 0.2s; 
-            margin-top: 10px;
+            width: 100%; background: #2b6cb0; color: white; border: none; padding: 14px; 
+            font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; 
         }
-        button:hover { background: #3182ce; }
+        button:hover { background: #2c5282; }
         button:disabled { background: #cbd5e0; cursor: not-allowed; }
-        .result-box { margin-top: 25px; padding: 15px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
-        .result-title { font-weight: bold; color: #2b6cb0; margin-bottom: 5px; }
-        .loading { text-align: center; color: #718096; display: none; margin-top: 15px; }
+        .loading { text-align: center; color: #718096; display: none; margin-top: 15px; font-weight: bold; }
+        .result-box { margin-top: 25px; padding: 20px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
+        /* 地図を表示するエリア */
+        #map { height: 350px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #cbd5e0; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>AI Location Finder 📍</h1>
+    <h1>AI & Map Hybrid Finder 📍</h1>
     
     <div class="form-group">
-        <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真を選択してください：</label>
+        <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真をアップロード：</label>
         <input type="file" id="imageInput" accept="image/*">
     </div>
     
-    <button id="uploadBtn">場所を推測する</button>
+    <button id="uploadBtn">AIと地図で場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが場所を解析中...（10秒ほどかかります）</div>
+    <div class="loading" id="loadingText">⏳ AIが解析＆地図を自動検索中...</div>
 
-    <div id="geminiResult" class="result-box">
-        <div class="result-title">🤖 Geminiの予測</div>
-        <div id="geminiContent"></div>
+    <div id="resultArea" class="result-box">
+        <h3 style="margin-top:0; color: #2b6cb0;">📍 検索・特定結果</h3>
+        <p id="resReason"></p>
+        <p id="resQuery"></p>
+        <p id="resAddress" style="font-size: 0.9em; color: #4a5568;"></p>
+        
+        <div id="map"></div>
     </div>
 </div>
 
@@ -54,50 +52,64 @@
     const imageInput = document.getElementById('imageInput');
     const uploadBtn = document.getElementById('uploadBtn');
     const loadingText = document.getElementById('loadingText');
-    const geminiResult = document.getElementById('geminiResult');
-    const geminiContent = document.getElementById('geminiContent');
+    const resultArea = document.getElementById('resultArea');
+    const resReason = document.getElementById('resReason');
+    const resQuery = document.getElementById('resQuery');
+    const resAddress = document.getElementById('resAddress');
+    
+    let map = null;
+    let marker = null;
 
     uploadBtn.addEventListener('click', async () => {
         const file = imageInput.files[0];
         if (!file) {
-            alert('写真を選んでからボタンを押してください！');
+            alert('写真を選択してください！');
             return;
         }
 
         uploadBtn.disabled = true;
         loadingText.style.display = 'block';
-        geminiResult.style.display = 'none';
+        resultArea.style.display = 'none';
 
         const formData = new FormData();
         formData.append('file', file);
 
         try {
-            const response = await fetch('/analyze', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                throw new Error('サーバー側でエラーが発生しました。');
-            }
-
+            const response = await fetch('/analyze', { method: 'POST', body: formData });
             const result = await response.json();
 
-            geminiResult.style.display = 'block';
-            if (result.gemini.status === 'success') {
-                try {
-                    const data = JSON.parse(result.gemini.data);
-                    geminiContent.innerHTML = `<strong>場所:</strong> ${data.location}<br><strong>座標:</strong> 緯度 ${data.lat}, 経度 ${data.lng}<br><strong>理由:</strong> ${data.reason}`;
-                } catch(e) {
-                    geminiContent.innerText = result.gemini.data;
-                }
-            } else {
-                geminiContent.style.color = 'red';
-                geminiContent.innerText = result.gemini.message;
+            if (!response.ok || !result.success) {
+                throw new Error(result.message || '解析に失敗しました。');
             }
 
+            // 結果を画面に表示
+            resultArea.style.display = 'block';
+            resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
+            resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
+            resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
+
+            // 地図の描画・更新
+            const lat = result.lat;
+            const lng = result.lng;
+
+            if (map === null) {
+                // 初回のみ地図オブジェクトを作成
+                map = L.map('map').setView([lat, lng], 14);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+                marker = L.marker([lat, lng]).addTo(map);
+            } else {
+                // 2回目以降は位置を移動させるだけ
+                map.setView([lat, lng], 14);
+                marker.setLatLng([lat, lng]);
+            }
+            
+            // 地図の表示崩れを防ぐおまじない
+            setTimeout(() => { map.invalidateSize(); }, 200);
+
         } catch (error) {
-            alert('エラーが発生しました: ' + error.message);
+            alert('エラー: ' + error.message);
         } finally {
             uploadBtn.disabled = false;
             loadingText.style.display = 'none';
