@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 
 app = FastAPI()
 
-# フォルダ階層のズレ対策
+# フォルダ階層の設定
 current_dir = os.path.dirname(os.path.abspath(__file__))
 templates_dir = os.path.join(current_dir, "templates")
 templates = Jinja2Templates(directory=templates_dir)
@@ -19,7 +19,6 @@ templates = Jinja2Templates(directory=templates_dir)
 gemini_key = os.environ.get("GEMINI_API_KEY")
 openai_key = os.environ.get("OPENAI_API_KEY")
 
-# キーが空の場合でも即死（Crash）しないように安全に初期化する
 try:
     if gemini_key:
         gemini_client = genai.Client(api_key=gemini_key)
@@ -81,10 +80,15 @@ async def ask_openai(image_bytes: bytes):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# 📝 これに書き換えます
+# ⭕ バージョン依存のエラーを回避し、HEADリクエストにも対応した安全なルーティング
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    # Renderからの生存確認（HEAD）には中身なしで200を返す
+    if request.method == "HEAD":
+        return HTMLResponse(content="", status_code=200)
+    
+    # 新しいJinja2仕様に合わせた安全な呼び出し方
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/analyze")
 async def analyze_image(file: UploadFile = File(...)):
