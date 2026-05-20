@@ -82,7 +82,7 @@ async def ask_openai(image_bytes: bytes):
         return {"status": "error", "message": str(e)}
 
 # 📝 これに書き換えます
-@app.route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
