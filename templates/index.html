@@ -10,8 +10,6 @@
         h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
         .form-group { margin-bottom: 20px; }
         input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; }
-        
-        /* ⭕ 確実に表示されるボタンのスタイル */
         button { 
             width: 100%; 
             background: #4299e1; 
@@ -27,7 +25,6 @@
         }
         button:hover { background: #3182ce; }
         button:disabled { background: #cbd5e0; cursor: not-allowed; }
-
         .result-box { margin-top: 25px; padding: 15px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
         .result-title { font-weight: bold; color: #2b6cb0; margin-bottom: 5px; }
         .loading { text-align: center; color: #718096; display: none; margin-top: 15px; }
@@ -51,11 +48,6 @@
         <div class="result-title">🤖 Geminiの予測</div>
         <div id="geminiContent"></div>
     </div>
-
-    <div id="openaiResult" class="result-box">
-        <div class="result-title">🧠 OpenAIの予測</div>
-        <div id="openaiContent"></div>
-    </div>
 </div>
 
 <script>
@@ -64,8 +56,6 @@
     const loadingText = document.getElementById('loadingText');
     const geminiResult = document.getElementById('geminiResult');
     const geminiContent = document.getElementById('geminiContent');
-    const openaiResult = document.getElementById('openaiResult');
-    const openaiContent = document.getElementById('openaiContent');
 
     uploadBtn.addEventListener('click', async () => {
         const file = imageInput.files[0];
@@ -74,11 +64,9 @@
             return;
         }
 
-        // 画面の初期化とローディング表示
         uploadBtn.disabled = true;
         loadingText.style.display = 'block';
         geminiResult.style.display = 'none';
-        openaiResult.style.display = 'none';
 
         const formData = new FormData();
         formData.append('file', file);
@@ -95,33 +83,17 @@
 
             const result = await response.json();
 
-            // Geminiの結果表示
             geminiResult.style.display = 'block';
             if (result.gemini.status === 'success') {
                 try {
                     const data = JSON.parse(result.gemini.data);
                     geminiContent.innerHTML = `<strong>場所:</strong> ${data.location}<br><strong>座標:</strong> 緯度 ${data.lat}, 経度 ${data.lng}<br><strong>理由:</strong> ${data.reason}`;
                 } catch(e) {
-                    // JSONパースに失敗した場合のフォールバック
                     geminiContent.innerText = result.gemini.data;
                 }
             } else {
                 geminiContent.style.color = 'red';
                 geminiContent.innerText = result.gemini.message;
-            }
-
-            // OpenAIの結果表示
-            openaiResult.style.display = 'block';
-            if (result.openai.status === 'success') {
-                try {
-                    const data = JSON.parse(result.openai.data);
-                    openaiContent.innerHTML = `<strong>場所:</strong> ${data.location}<br><strong>座標:</strong> 緯度 ${data.lat}, 経度 ${data.lng}<br><strong>理由:</strong> ${data.reason}`;
-                } catch(e) {
-                    openaiContent.innerText = result.openai.data;
-                }
-            } else {
-                openaiContent.style.color = 'red';
-                openaiContent.innerText = result.openai.message;
             }
 
         } catch (error) {
