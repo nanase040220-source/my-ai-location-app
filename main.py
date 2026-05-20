@@ -84,7 +84,7 @@ async def ask_openai(image_bytes: bytes):
 # 📝 これに書き換えます
 @app.route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request}))
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/analyze")
 async def analyze_image(file: UploadFile = File(...)):
