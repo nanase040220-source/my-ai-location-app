@@ -3,242 +3,135 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI位置推測 比較コンソール</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <title>AI Location Finder</title>
     <style>
-        body {
-            font-family: 'Helvetica Neue', Arial, sans-serif;
-            background-color: #f5f7fa;
-            margin: 0;
-            padding: 20px;
-            color: #333;
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; background: white; padding: 30px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
+        .form-group { margin-bottom: 20px; }
+        input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; }
+        
+        /* ⭕ 確実に表示されるボタンのスタイル */
+        button { 
+            width: 100%; 
+            background: #4299e1; 
+            color: white; 
+            border: none; 
+            padding: 12px; 
+            font-size: 16px; 
+            font-weight: bold; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            transition: background 0.2s; 
+            margin-top: 10px;
         }
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-        }
-        h1 {
-            text-align: center;
-            color: #2c3e50;
-        }
-        .upload-area {
-            background: white;
-            border: 2px dashed #cbd5e1;
-            border-radius: 12px;
-            padding: 40px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            margin-bottom: 20px;
-        }
-        .upload-area:hover {
-            border-color: #3b82f6;
-            background-color: #eff6ff;
-        }
-        #image-preview {
-            max-width: 100%;
-            max-height: 200px;
-            margin-top: 15px;
-            border-radius: 8px;
-            display: none;
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            font-weight: bold;
-            color: #3b82f6;
-            margin: 20px 0;
-        }
-        #map {
-            height: 400px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-            display: none;
-        }
-        .results-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        @media (max-width: 768px) {
-            .results-grid { grid-template-columns: 1fr; }
-        }
-        .card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-            border-top: 5px solid #ccc;
-        }
-        .card.gemini { border-top-color: #ea4335; }
-        .card.openai { border-top-color: #10a37f; }
-        .card h2 {
-            margin-top: 0;
-            font-size: 1.25rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        .badge {
-            font-size: 0.75rem;
-            padding: 4px 8px;
-            border-radius: 20px;
-            color: white;
-        }
-        .gemini .badge { background-color: #ea4335; }
-        .openai .badge { background-color: #10a37f; }
-        .reason-text {
-            background: #f8fafc;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            line-height: 1.5;
-            white-space: pre-wrap;
-        }
+        button:hover { background: #3182ce; }
+        button:disabled { background: #cbd5e0; cursor: not-allowed; }
+
+        .result-box { margin-top: 25px; padding: 15px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
+        .result-title { font-weight: bold; color: #2b6cb0; margin-bottom: 5px; }
+        .loading { text-align: center; color: #718096; display: none; margin-top: 15px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>AI位置推測 比較コンソール</h1>
+    <h1>AI Location Finder 📍</h1>
     
-    <div class="upload-area" id="drop-zone">
-        <p>ここに風景写真をドラッグ＆ドロップ、またはクリックして選択</p>
-        <input type="file" id="file-input" accept="image/*" style="display: none;">
-        <img id="image-preview" alt="プレビュー">
+    <div class="form-group">
+        <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真を選択してください：</label>
+        <input type="file" id="imageInput" accept="image/*">
+    </div>
+    
+    <button id="uploadBtn">場所を推測する</button>
+
+    <div class="loading" id="loadingText">⏳ AIが場所を解析中...（10秒ほどかかります）</div>
+
+    <div id="geminiResult" class="result-box">
+        <div class="result-title">🤖 Geminiの予測</div>
+        <div id="geminiContent"></div>
     </div>
 
-    <div class="loading" id="loading-text">複数のAIで位置を解析中...数秒かかります...</div>
-
-    <div id="map"></div>
-
-    <div class="results-grid" id="results-container" style="display: none;">
-        <div class="card gemini">
-            <h2>Gemini <span class="badge">推測</span></h2>
-            <p><strong>予想位置:</strong> <span id="gemini-loc">-</span></p>
-            <p><strong>座標:</strong> <span id="gemini-coords">-</span></p>
-            <div class="reason-text" id="gemini-reason">-</div>
-        </div>
-
-        <div class="card openai">
-            <h2>OpenAI (GPT) <span class="badge">推測</span></h2>
-            <p><strong>予想位置:</strong> <span id="openai-loc">-</span></p>
-            <p><strong>座標:</strong> <span id="openai-coords">-</span></p>
-            <div class="reason-text" id="openai-reason">-</div>
-        </div>
+    <div id="openaiResult" class="result-box">
+        <div class="result-title">🧠 OpenAIの予測</div>
+        <div id="openaiContent"></div>
     </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('file-input');
-    const imagePreview = document.getElementById('image-preview');
-    const loadingText = document.getElementById('loading-text');
-    const mapElement = document.getElementById('map');
-    const resultsContainer = document.getElementById('results-container');
+    const imageInput = document.getElementById('imageInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const loadingText = document.getElementById('loadingText');
+    const geminiResult = document.getElementById('geminiResult');
+    const geminiContent = document.getElementById('geminiContent');
+    const openaiResult = document.getElementById('openaiResult');
+    const openaiContent = document.getElementById('openaiContent');
 
-    let map = null;
-    let markers = [];
-
-    dropZone.addEventListener('click', () => fileInput.click());
-
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = '#3b82f6';
-    });
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.style.borderColor = '#cbd5e1';
-    });
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = '#cbd5e1';
-        if (e.dataTransfer.files.length > 0) {
-            handleFile(e.dataTransfer.files[0]);
-        }
-    });
-
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFile(e.target.files[0]);
-        }
-    });
-
-    function handleFile(file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            imagePreview.src = e.target.result;
-            imagePreview.style.display = 'inline-block';
-        };
-        reader.readAsDataURL(file);
-        uploadAndAnalyze(file);
-    }
-
-    function initMap(geminiLat, geminiLng, openaiLat, openaiLng) {
-        mapElement.style.display = 'block';
-        if (map !== null) {
-            map.remove();
+    uploadBtn.addEventListener('click', async () => {
+        const file = imageInput.files[0];
+        if (!file) {
+            alert('写真を選んでからボタンを押してください！');
+            return;
         }
 
-        const centerLat = (geminiLat + openaiLat) / 2;
-        const centerLng = (geminiLng + openaiLng) / 2;
-        map = L.map('map').setView([centerLat, centerLng], 4);
-
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
-
-        const geminiMarker = L.marker([geminiLat, geminiLng]).addTo(map)
-            .bindPopup('<b>Geminiの予測位置</b>').openPopup();
-            
-        const openaiMarker = L.marker([openaiLat, openaiLng]).addTo(map)
-            .bindPopup('<b>OpenAIの予測位置</b>');
-
-        markers = [geminiMarker, openaiMarker];
-        const group = new L.featureGroup(markers);
-        map.fitBounds(group.getBounds().pad(0.5));
-    }
-
-    async function uploadAndAnalyze(file) {
+        // 画面の初期化とローディング表示
+        uploadBtn.disabled = true;
         loadingText.style.display = 'block';
-        resultsContainer.style.display = 'none';
-        mapElement.style.display = 'none';
+        geminiResult.style.display = 'none';
+        openaiResult.style.display = 'none';
 
         const formData = new FormData();
         formData.append('file', file);
 
         try {
-            // 同一サーバー内（動的アプリ）なので相対パスで送信
             const response = await fetch('/analyze', {
                 method: 'POST',
                 body: formData
             });
 
-            if (!response.ok) throw new Error('サーバーエラーが発生しました');
+            if (!response.ok) {
+                throw new Error('サーバー側でエラーが発生しました。');
+            }
+
             const result = await response.json();
 
-            const geminiData = JSON.parse(result.gemini.data);
-            const openaiData = JSON.parse(result.openai.data);
+            // Geminiの結果表示
+            geminiResult.style.display = 'block';
+            if (result.gemini.status === 'success') {
+                try {
+                    const data = JSON.parse(result.gemini.data);
+                    geminiContent.innerHTML = `<strong>場所:</strong> ${data.location}<br><strong>座標:</strong> 緯度 ${data.lat}, 経度 ${data.lng}<br><strong>理由:</strong> ${data.reason}`;
+                } catch(e) {
+                    // JSONパースに失敗した場合のフォールバック
+                    geminiContent.innerText = result.gemini.data;
+                }
+            } else {
+                geminiContent.style.color = 'red';
+                geminiContent.innerText = result.gemini.message;
+            }
 
-            document.getElementById('gemini-loc').textContent = geminiData.location;
-            document.getElementById('gemini-coords').textContent = `${geminiData.lat}, ${geminiData.lng}`;
-            document.getElementById('gemini-reason').textContent = geminiData.reason;
-
-            document.getElementById('openai-loc').textContent = openaiData.location;
-            document.getElementById('openai-coords').textContent = `${openaiData.lat}, ${openaiData.lng}`;
-            document.getElementById('openai-reason').textContent = openaiData.reason;
-
-            initMap(geminiData.lat, geminiData.lng, openaiData.lat, openaiData.lng);
-            resultsContainer.style.display = 'grid';
+            // OpenAIの結果表示
+            openaiResult.style.display = 'block';
+            if (result.openai.status === 'success') {
+                try {
+                    const data = JSON.parse(result.openai.data);
+                    openaiContent.innerHTML = `<strong>場所:</strong> ${data.location}<br><strong>座標:</strong> 緯度 ${data.lat}, 経度 ${data.lng}<br><strong>理由:</strong> ${data.reason}`;
+                } catch(e) {
+                    openaiContent.innerText = result.openai.data;
+                }
+            } else {
+                openaiContent.style.color = 'red';
+                openaiContent.innerText = result.openai.message;
+            }
 
         } catch (error) {
             alert('エラーが発生しました: ' + error.message);
-            console.error(error);
         } finally {
+            uploadBtn.disabled = false;
             loadingText.style.display = 'none';
         }
-    }
+    });
 </script>
+
 </body>
 </html>
