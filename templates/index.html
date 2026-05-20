@@ -22,18 +22,29 @@
         .result-box { margin-top: 25px; padding: 20px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
         #map { height: 350px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #cbd5e0; }
         
-        /* 確率表示リスト用のおしゃれなスタイル */
         .candidate-list { list-style: none; padding: 0; margin: 15px 0; }
         .candidate-item { 
-            padding: 10px 15px; margin-bottom: 8px; border-radius: 6px; 
+            padding: 15px; margin-bottom: 12px; border-radius: 6px; 
             background: white; border-left: 5px solid #cbd5e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            display: flex; justify-content: space-between; align-items: center;
         }
-        .rank-1 { border-left-color: #e53e3e; } /* 1位は赤 */
-        .rank-2 { border-left-color: #3182ce; } /* 2位は青 */
-        .rank-3 { border-left-color: #38a169; } /* 3位は緑 */
+        .candidate-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .rank-1 { border-left-color: #e53e3e; }
+        .rank-2 { border-left-color: #3182ce; }
+        .rank-3 { border-left-color: #38a169; }
         .prob-badge { font-weight: bold; padding: 2px 8px; border-radius: 12px; background: #edf2f7; color: #4a5568; }
         .rank-1 .prob-badge { background: #fed7d7; color: #9b2c2c; }
+
+        /* 🔥 ボタン配置用のスタイル */
+        .btn-group { display: flex; gap: 8px; margin-top: 5px; }
+        .verify-btn { 
+            flex: 1; padding: 8px; font-size: 12px; font-weight: normal; background: #4a5568; text-align: center;
+            color: white; text-decoration: none; border-radius: 4px; transition: background 0.2s;
+        }
+        .verify-btn:hover { background: #2d3748; }
+        .btn-img { background: #dd6b20; } /* 画像検索はオレンジ */
+        .btn-img:hover { background: #c05621; }
+        .btn-sv { background: #319795; }  /* ストリートビューは緑 */
+        .btn-sv:hover { background: #234e52; }
     </style>
 </head>
 <body>
@@ -71,9 +82,8 @@
         const candidateList = document.getElementById('candidateList');
         
         let map = null;
-        let markersGroup = []; // 複数のピンを管理する配列
+        let markersGroup = [];
 
-        // ピンの色を変えるための共通関数（Leaflet標準のピンの色をフィルターで擬似変更）
         function createIcon(colorFilter) {
             return L.divIcon({
                 className: 'custom-pin',
@@ -84,11 +94,10 @@
             });
         }
 
-        // 色違いピンの設定
         const icons = [
-            createIcon("hue-rotate(140deg) brightness(0.9) contrast(1.2)"), // 1位: 赤っぽく
-            createIcon("none"),                                            // 2位: 青（デフォルト）
-            createIcon("hue-rotate(260deg) saturate(1.5)")                 // 3位: 緑っぽく
+            createIcon("hue-rotate(140deg) brightness(0.9) contrast(1.2)"), 
+            createIcon("none"),                                            
+            createIcon("hue-rotate(260deg) saturate(1.5)")                 
         ];
 
         uploadBtn.addEventListener('click', async () => {
@@ -117,7 +126,6 @@
                 resultArea.style.display = 'block';
                 resReason.innerHTML = `<strong>AIの推理ロジック:</strong><br>${result.reason}`;
 
-                // 地図が未作成なら初期化
                 if (map === null) {
                     map = L.map('map');
                     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -125,27 +133,36 @@
                     }).addTo(map);
                 }
 
-                // 過去のピンをすべて削除
                 markersGroup.forEach(m => map.removeLayer(m));
                 markersGroup = [];
 
-                const bounds = []; // 全ピンを収めるための範囲データ
+                const bounds = [];
 
-                // 戻ってきた候補地（最大3つ）をループ処理
                 result.candidates.forEach((candidate, index) => {
                     const rank = index + 1;
                     
-                    // 1. 画面のリストに表示を追加
+                    // 🔥 Google画像検索とストリートビューのURLを生成
+                    const encodedLocation = encodeURIComponent(candidate.location);
+                    const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodedLocation}`;
+                    const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${candidate.lat},${candidate.lng}`;
+
+                    // 1. リストの作成（ボタンを追加）
                     const li = document.createElement('li');
                     li.className = `candidate-item rank-${rank}`;
                     li.innerHTML = `
-                        <div><strong>第${rank}候補:</strong> ${candidate.location}</div>
-                        <span class="prob-badge">${candidate.probability}</span>
+                        <div class="candidate-header">
+                            <div><strong>第${rank}候補:</strong> ${candidate.location}</div>
+                            <span class="prob-badge">${candidate.probability}</span>
+                        </div>
+                        <div class="btn-group">
+                            <a href="${googleImagesUrl}" target="_blank" class="verify-btn btn-img">🔍 Google画像検索で確認</a>
+                            <a href="${streetViewUrl}" target="_blank" class="verify-btn btn-sv">🚗 ストリートビューを開く</a>
+                        </div>
                     `;
                     candidateList.appendChild(li);
 
-                    // 2. 地図上にピンを立てる
-                    const markerIcon = icons[index] || icons[1]; // 色を割り当て
+                    // 2. ピン立て
+                    const markerIcon = icons[index] || icons[1];
                     const marker = L.marker([candidate.lat, candidate.lng], { icon: markerIcon })
                         .addTo(map)
                         .bindPopup(`<b>第${rank}候補</b><br>${candidate.location}<br>確率: ${candidate.probability}`);
@@ -153,13 +170,11 @@
                     markersGroup.push(marker);
                     bounds.push([candidate.lat, candidate.lng]);
                     
-                    // 1位のピンは最初から吹き出しを開いておく
                     if (index === 0) {
                         marker.openPopup();
                     }
                 });
 
-                // 3. すべてのピンが綺麗に見えるように地図の表示位置・ズームを自動調整
                 if (bounds.length > 0) {
                     map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
                 }
