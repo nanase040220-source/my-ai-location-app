@@ -29,6 +29,7 @@ print("===========================")
 def get_prompt(user_hint: str) -> str:
     hint_text = f"\n[ユーザーからのヒント・情報]: {user_hint}" if user_hint else ""
     return (
+        "【IMPORTANT: RESPONSE MUST BE A VALID JSON OBJECT】\n"
         "画像とユーザーからの追加ヒントを組み合わせて、場所を特定してください。\n"
         "必ず以下のJSONフォーマットのみで返してください。他の挨拶や説明は一切含めないでください。\n"
         "{\n"
@@ -49,7 +50,6 @@ async def try_groq(image_bytes: bytes, user_hint: str):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
     
-    # OpenAI/Groqの正しいマルチモーダル構造に修正
     payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [
@@ -61,7 +61,7 @@ async def try_groq(image_bytes: bytes, user_hint: str):
                 ]
             }
         ],
-        "response_format": {"type": "json_object"},
+        "response_format": {"type": "json_object"}, # プロンプト内に「JSON」の文字が必須
         "temperature": 0.2,
         "max_tokens": 1024
     }
@@ -76,9 +76,14 @@ async def try_openrouter(image_bytes: bytes, user_hint: str):
     b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
 
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
+    # OpenRouterの要件に合わせてReferer等のヘッダーを追加
+    headers = {
+        "Authorization": f"Bearer {openrouter_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://render.com", 
+        "X-Title": "AI Location App"
+    }
     
-    # 確実に存在するOpenRouter無料枠モデルを指定
     payload = {
         "model": "google/gemini-2.5-flash:free",
         "messages": [
@@ -114,21 +119,16 @@ async def try_cloudflare(image_bytes: bytes, user_hint: str):
     if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
     full_prompt = get_prompt(user_hint)
     
-    # Cloudflare Workers AI Llavaの正しい仕様（マルチパート形式かバイナリ）
-    # 今回は最もエラーの起きにくい環境変数認証＋公式推奨のパラメータ渡しに最適化
+    # Cloudflare Workers AIで最も確実な「バイナリ直接POST ＋ クエリプロンプト」形式に変更
     url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
-    headers = {"Authorization": f"Bearer {cloudflare_token}"}
-    
-    # データをバイナリで直接送信するか、Base64文字列（プレフィックスなし）としてjsonで送る
-    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-    payload = {
-        "prompt": full_prompt,
-        "image": image_b64,
-        "max_tokens": 512
+    headers = {
+        "Authorization": f"Bearer {cloudflare_token}",
+        "Content-Type": "application/octet-stream" # バイナリデータとして送信
     }
     
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=25.0)
+        # URLのクエリパラメータとしてプロンプトを渡す、ボディには画像バイナリをそのまま流す
+        response = await client.post(f"{url}?prompt={httpx.URL(full_prompt)}", headers=headers, content=image_bytes, timeout=25.0)
         response.raise_for_status()
         res_text = response.json()["result"]["description"]
         json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
