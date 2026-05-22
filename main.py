@@ -22,13 +22,12 @@ except Exception as e:
     print(f"Gemini Init Error: {e}")
     gemini_client = None
 
-async def ask_gemini_geoguessr(image_bytes: bytes, mime_type: str, user_hint: str, use_backup_model: bool = False):
-    """Google Gemini（メイン＆バックアップ兼用、大容量画像もエラーなしで高速処理）"""
+async def ask_gemini_geoguessr(image_bytes: bytes, mime_type: str, user_hint: str):
+    """
+    Google Gemini (無料枠で最も安定し、画像サイズ制限もない gemini-2.5-flash を固定で使用)
+    """
     if not gemini_client:
         raise Exception("Gemini API Key is missing.")
-
-    # 使うモデルを切り替える（1つ目が混雑していたらより強力なプレミアムモデルに自動切替）
-    model_name = 'gemini-2.5-pro' if use_backup_model else 'gemini-2.0-flash'
 
     hint_text = f"\n[ユーザーからの追加情報・ヒント]: {user_hint}\n" if user_hint else ""
 
@@ -50,8 +49,9 @@ async def ask_gemini_geoguessr(image_bytes: bytes, mime_type: str, user_hint: st
         temperature=0.2
     )
     
+    # 🚀 無料で超高速、1日の制限も非常に緩い最新の「gemini-2.5-flash」に統一
     response = await gemini_client.aio.models.generate_content(
-        model=model_name,
+        model='gemini-2.5-flash',
         contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type), full_prompt],
         config=config
     )
@@ -70,8 +70,8 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
     safe_hint = hint if hint else ""
 
     try:
-        # 1. まずは通常のGeminiモデルで解析
-        gemini_result = await ask_gemini_geoguessr(image_bytes, mime_type, safe_hint, use_backup_model=False)
+        # 最も安定したモデルで解析を実行
+        gemini_result = await ask_gemini_geoguessr(image_bytes, mime_type, safe_hint)
         data = json.loads(gemini_result)
         return {
             "success": True,
@@ -82,18 +82,9 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
             "lng": float(data.get("lng", 0))
         }
     except Exception as e:
-        print(f"メインモデル混雑、バックアップ高級モデルへ移行: {e}")
-        try:
-            # 2. 失敗した（混雑している）場合は、超高性能なプロモデル（Gemini 2.5 Pro）でリトライ
-            gemini_result = await ask_gemini_geoguessr(image_bytes, mime_type, safe_hint, use_backup_model=True)
-            data = json.loads(gemini_result)
-            return {
-                "success": True,
-                "reason": data.get("reason", "") + " (※高精度バックアップAIで解析)",
-                "query_used": data.get("query_used", ""),
-                "location": data.get("location", ""),
-                "lat": float(data.get("lat", 0)),
-                "lng": float(data.get("lng", 0))
-            }
-        except Exception as e2:
-            return {"success": False, "message": f"AIサーバーが非常に混雑しています。15秒ほど置いて再度お試しください。({e2})"}
+        print(f"解析エラー: {e}")
+        # 生のエラーメッセージがフロントに出て混乱するのを防ぐため、わかりやすい文言に丸めます
+        return {
+            "success": False, 
+            "message": f"AIサーバー側でエラーが発生しました。時間を置いて再度お試しください。({str(e)[:100]})"
+        }
