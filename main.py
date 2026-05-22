@@ -64,27 +64,28 @@ async def try_groq(image_bytes: bytes, user_hint: str):
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8')
     
-    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
-    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-    
-    payload = {
-        "model": "llama-3.2-11b-vision-preview",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": full_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
-                ]
-            }
-        ],
-        "temperature": 0.2,
-        "max_tokens": 1024
-    }
+    # 絶対パスでクライアントを動かす
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
+        response = await client.post(
+            "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.2-11b-vision-preview",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": full_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
+                        ]
+                    }
+                ],
+                "temperature": 0.2,
+                "max_tokens": 1024
+            },
+            timeout=20.0
+        )
         if response.status_code != 200:
-            # APIが返してきた生のエラーメッセージを例外に仕込む
             raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["choices"][0]["message"]["content"]
         return extract_json_safe(res_text)
@@ -94,29 +95,30 @@ async def try_openrouter(image_bytes: bytes, user_hint: str):
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8')
 
-    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
-    headers = {
-        "Authorization": f"Bearer {openrouter_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "[https://render.com](https://render.com)",
-        "X-Title": "AI Location App"
-    }
-    
-    payload = {
-        "model": "meta-llama/llama-3.2-11b-vision-instruct:free",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": full_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
-                ]
-            }
-        ],
-        "temperature": 0.2
-    }
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
+        response = await client.post(
+            "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)",
+            headers={
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "[https://render.com](https://render.com)",
+                "X-Title": "AI Location App"
+            },
+            json={
+                "model": "meta-llama/llama-3.2-11b-vision-instruct:free",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": full_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
+                        ]
+                    }
+                ],
+                "temperature": 0.2
+            },
+            timeout=20.0
+        )
         if response.status_code != 200:
             raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["choices"][0]["message"]["content"]
@@ -137,15 +139,21 @@ async def try_gemini(image_bytes: bytes, mime_type: str, user_hint: str, model_n
 async def try_cloudflare(image_bytes: bytes, user_hint: str):
     if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
     full_prompt = get_prompt(user_hint)
+    b64_data = base64.b64encode(image_bytes).decode('utf-8')
     
     url = f"[https://api.cloudflare.com/client/v4/accounts/](https://api.cloudflare.com/client/v4/accounts/){cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
-    headers = {
-        "Authorization": f"Bearer {cloudflare_token}",
-        "Content-Type": "application/octet-stream"
-    }
     
+    # URLパラメータの改行バグを完全に排除し、標準的なJSONで安全に送る
     async with httpx.AsyncClient() as client:
-        response = await client.post(f"{url}?prompt={httpx.URL(full_prompt)}", headers=headers, content=image_bytes, timeout=25.0)
+        response = await client.post(
+            url, 
+            headers={"Authorization": f"Bearer {cloudflare_token}", "Content-Type": "application/json"}, 
+            json={
+                "prompt": full_prompt,
+                "image": b64_data
+            }, 
+            timeout=25.0
+        )
         if response.status_code != 200:
             raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["result"]["description"]
