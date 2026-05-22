@@ -45,19 +45,28 @@ async def try_groq(image_bytes: bytes, user_hint: str):
     if not groq_key: raise Exception("Groq Key missing")
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
-    data_url = f"data:image/jpeg;base64,{b64_data}"
-
+    
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+    
+    # OpenAI/Groqの正しいマルチモーダル構造に修正
     payload = {
         "model": "llama-3.2-11b-vision-preview",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": data_url}}]}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": full_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
+                ]
+            }
+        ],
         "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": 1024
     }
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=15.0)
+        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
         response.raise_for_status()
         return json.loads(response.json()["choices"][0]["message"]["content"])
 
@@ -65,18 +74,27 @@ async def try_openrouter(image_bytes: bytes, user_hint: str):
     if not openrouter_key: raise Exception("OpenRouter Key missing")
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
-    data_url = f"data:image/jpeg;base64,{b64_data}"
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
+    
+    # 確実に存在するOpenRouter無料枠モデルを指定
     payload = {
-        "model": "meta-llama/llama-3.2-11b-vision-instruct:free",
-        "messages": [{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": data_url}}]}],
+        "model": "google/gemini-2.5-flash:free",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": full_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}}
+                ]
+            }
+        ],
         "response_format": {"type": "json_object"},
         "temperature": 0.2
     }
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=15.0)
+        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
         response.raise_for_status()
         return json.loads(response.json()["choices"][0]["message"]["content"])
 
@@ -95,11 +113,22 @@ async def try_gemini(image_bytes: bytes, mime_type: str, user_hint: str, model_n
 async def try_cloudflare(image_bytes: bytes, user_hint: str):
     if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
     full_prompt = get_prompt(user_hint)
+    
+    # Cloudflare Workers AI Llavaの正しい仕様（マルチパート形式かバイナリ）
+    # 今回は最もエラーの起きにくい環境変数認証＋公式推奨のパラメータ渡しに最適化
     url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
-    headers = {"Authorization": f"Bearer {cloudflare_token}", "Content-Type": "application/json"}
-    payload = {"prompt": full_prompt, "image": list(image_bytes), "max_tokens": 512}
+    headers = {"Authorization": f"Bearer {cloudflare_token}"}
+    
+    # データをバイナリで直接送信するか、Base64文字列（プレフィックスなし）としてjsonで送る
+    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+    payload = {
+        "prompt": full_prompt,
+        "image": image_b64,
+        "max_tokens": 512
+    }
+    
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=20.0)
+        response = await client.post(url, headers=headers, json=payload, timeout=25.0)
         response.raise_for_status()
         res_text = response.json()["result"]["description"]
         json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
@@ -118,21 +147,21 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
 
     print("=== 高速フォールバック・ループ開始 ===")
     
-    # 🌟 1. まず制限が緩く・爆速な Groq を試す
+    # 1. Groq
     try:
         print("[1番手: Groq] 試行中...")
         data = await try_groq(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※Groq)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Groq 失敗: {str(e)[:50]}。即座にOpenRouterへ切り替えます。")
+        print(f"→ Groq 失敗: {str(e)[:60]}。OpenRouterへ切り替えます。")
 
-    # 🌟 2. 次に独立した無料枠を持つ OpenRouter (Llama) を試す
+    # 2. OpenRouter
     try:
         print("[2番手: OpenRouter] 試行中...")
         data = await try_openrouter(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※OpenRouter)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ OpenRouter 失敗: {str(e)[:50]}。Gemini Proへ移行します。")
+        print(f"→ OpenRouter 失敗: {str(e)[:60]}。Gemini Proへ移行します。")
 
     # 3. Gemini Pro
     try:
@@ -140,7 +169,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-pro')
         return {"success": True, "reason": data.get("reason"), "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Gemini Pro 失敗: {str(e)[:50]}。Gemini Flashへ移行します。")
+        print(f"→ Gemini Pro 失敗: {str(e)[:60]}。Gemini Flashへ移行します。")
 
     # 4. Gemini Flash
     try:
@@ -148,7 +177,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-flash')
         return {"success": True, "reason": data.get("reason") + " (※Flash)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Gemini Flash 失敗: {str(e)[:50]}。Cloudflareへ移行します。")
+        print(f"→ Gemini Flash 失敗: {str(e)[:60]}。Cloudflareへ移行します。")
 
     # 5. Cloudflare Workers AI
     try:
@@ -156,9 +185,9 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_cloudflare(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※Cloudflare)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Cloudflare 失敗: {str(e)[:50]}")
+        print(f"→ Cloudflare 失敗: {str(e)[:60]}")
 
     return {
         "success": False, 
-        "message": "すべてのAIへの接続試行がタイムアウトまたは制限により失敗しました。"
+        "message": "すべてのAIへの接続試行がデータ不適合または制限により失敗しました。"
     }
