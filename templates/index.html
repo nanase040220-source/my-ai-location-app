@@ -18,10 +18,13 @@
         button { width: 100%; background: #0284c7; color: white; border: none; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
         button:hover { background: #0369a1; }
         button:disabled { background: #334155; cursor: not-allowed; }
-        .loading { text-align: center; color: #38bdf8; display: none; margin-top: 15px; font-weight: bold; }
+        
+        /* 📈 パーセント進捗バーのカスタムデザイン */
+        .progress-container { display: none; margin-top: 20px; background: #0f172a; border-radius: 10px; padding: 4px; border: 1px solid #334155; }
+        .progress-bar { width: 0%; height: 16px; background: linear-gradient(90deg, #0284c7, #38bdf8); border-radius: 8px; transition: width 0.4s ease; }
+        .progress-text { text-align: center; color: #38bdf8; margin-top: 8px; font-weight: bold; font-size: 14px; }
         
         .result-box { margin-top: 25px; padding: 20px; border-radius: 12px; background: #0f172a; border: 1px solid #334155; display: none; }
-        
         .analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
         .analysis-card { background: #1e293b; padding: 12px; border-radius: 8px; border-left: 4px solid #38bdf8; }
         .analysis-card h5 { margin: 0 0 5px 0; color: #38bdf8; font-size: 14px; }
@@ -63,7 +66,10 @@
     
     <button id="uploadBtn">大地の特徴から場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが地形・土壌・植生・太陽の影をディープに分析中...</div>
+    <div class="progress-container" id="progressContainer">
+        <div class="progress-bar" id="progressBar"></div>
+        <div class="progress-text" id="progressText">⏳ 解析準備中... 0%</div>
+    </div>
 
     <div id="resultArea" class="result-box">
         <h3 style="margin-top:0; color: #38bdf8;">📊 科学的・地理的分析結果</h3>
@@ -107,7 +113,9 @@
         const imageInput = document.getElementById('imageInput');
         const hintInput = document.getElementById('hintInput');
         const uploadBtn = document.getElementById('uploadBtn');
-        const loadingText = document.getElementById('loadingText');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
         const resultArea = document.getElementById('resultArea');
         
         const anTopo = document.getElementById('anTopo');
@@ -142,9 +150,31 @@
             if (!file) { alert('写真を選択してください！'); return; }
 
             uploadBtn.disabled = true;
-            loadingText.style.display = 'block';
+            progressContainer.style.display = 'block';
             resultArea.style.display = 'none';
             candidateList.innerHTML = '';
+            
+            // 📈 進捗率の管理ロジック
+            let currentProgress = 5;
+            progressBar.style.width = currentProgress + '%';
+            progressText.innerText = `画像をアップロード中... ${currentProgress}%`;
+
+            // タイマーでじわじわパーセントを上げる（混雑時の待機中も画面を動かす）
+            const progressTimer = setInterval(() => {
+                if (currentProgress < 95) {
+                    currentProgress += Math.floor(Math.random() * 3) + 1; // 1~3%ずつランダム上昇
+                    if (currentProgress > 95) currentProgress = 95;
+                    progressBar.style.width = currentProgress + '%';
+                    
+                    if (currentProgress < 40) {
+                        progressText.innerText = `画像を精査中... ${currentProgress}%`;
+                    } else if (currentProgress < 75) {
+                        progressText.innerText = `地形・植生・影の角度をスキャン中... ${currentProgress}%`;
+                    } else {
+                        progressText.innerText = `サーバーと通信中（混雑時は自動リトライします）... ${currentProgress}%`;
+                    }
+                }
+            }, 400);
 
             const formData = new FormData();
             formData.append('file', file);
@@ -156,7 +186,15 @@
 
                 if (!response.ok || !result.success) throw new Error(result.message || '解析に失敗しました。');
 
-                resultArea.style.display = 'block';
+                // 完了したらメーターを100%にする
+                clearInterval(progressTimer);
+                progressBar.style.width = '100%';
+                progressText.innerText = '解析完了！ 100%';
+
+                setTimeout(() => {
+                    progressContainer.style.display = 'none';
+                    resultArea.style.display = 'block';
+                }, 500);
                 
                 anTopo.innerText = result.analysis.topography;
                 anSoil.innerText = result.analysis.soil;
@@ -181,7 +219,7 @@
                     const encodedLocation = encodeURIComponent(candidate.location);
                     const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodedLocation}`;
                     
-                    // 🗺️ 修正：Google公式の正しい共有用ストリートビューURLを生成
+                    // 🗺️ 修正：Google公式の安全なパノラマ・ストリートビュー表示インテントURLに変更
                     const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${candidate.lat},${candidate.lng}`;
 
                     const li = document.createElement('li');
@@ -216,10 +254,11 @@
                 setTimeout(() => { map.invalidateSize(); }, 200);
 
             } catch (error) {
+                clearInterval(progressTimer);
+                progressContainer.style.display = 'none';
                 alert('エラー: ' + error.message);
             } finally {
                 uploadBtn.disabled = false;
-                loadingText.style.display = 'none';
             }
         });
     });
