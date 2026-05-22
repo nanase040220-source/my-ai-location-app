@@ -14,10 +14,14 @@ import httpx
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
+# 各種APIキー・環境変数の取得
 gemini_key = os.environ.get("GEMINI_API_KEY")
 groq_key = os.environ.get("GROQ_API_KEY")
+openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+cloudflare_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+cloudflare_account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
 
-# Gemini クライアント初期化
+# Gemini 初期化
 try:
     gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
 except Exception as e:
@@ -25,7 +29,7 @@ except Exception as e:
     gemini_client = None
 
 def get_prompt(user_hint: str) -> str:
-    """共通のプロンプト（JSON形式を強制）"""
+    """すべてのAIで共通使用するJSON強制プロンプト"""
     hint_text = f"\n[ユーザーからのヒント・情報]: {user_hint}" if user_hint else ""
     return (
         "画像とユーザーからの追加ヒントを組み合わせて、場所を特定してください。\n"
@@ -41,35 +45,26 @@ def get_prompt(user_hint: str) -> str:
     )
 
 async def try_gemini(image_bytes: bytes, mime_type: str, user_hint: str, model_name: str, retries: int = 3, delay: int = 3):
-    """Geminiモデル用のリトライ機能付き実行関数"""
-    if not gemini_client:
-        raise Exception("Gemini API Key is missing.")
-        
+    if not gemini_client: raise Exception("Gemini API Key missing")
     full_prompt = get_prompt(user_hint)
     config = types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2)
-
+    
     for attempt in range(retries):
         try:
-            print(f"[{model_name}] 解析試行中... ({attempt + 1}/{retries})")
+            print(f"[{model_name}] 試行中... ({attempt + 1}/{retries})")
             response = await gemini_client.aio.models.generate_content(
                 model=model_name,
                 contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type), full_prompt],
                 config=config
             )
-            # 正常に取得できたらJSONをパースして返す
             return json.loads(response.text)
         except Exception as e:
-            print(f"[{model_name}] 失敗 (残りリトライ {retries - attempt - 1}): {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(delay) # 指定秒数待機してリトライ
-            else:
-                raise e # リトライを使い切ったら次のAIへ投げるためエラーを出す
+            print(f"[{model_name}] 失敗: {e}")
+            if attempt < retries - 1: await asyncio.sleep(delay)
+            else: raise e
 
 async def try_groq(image_bytes: bytes, user_hint: str, retries: int = 3, delay: int = 3):
-    """Groq用のリトライ機能付き実行関数（JSONモード強制）"""
-    if not groq_key:
-        raise Exception("Groq API Key is missing.")
-
+    if not groq_key: raise Exception("Groq API Key missing")
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
     data_url = f"data:image/jpeg;base64,{b64_data}"
@@ -86,23 +81,81 @@ async def try_groq(image_bytes: bytes, user_hint: str, retries: int = 3, delay: 
 
     for attempt in range(retries):
         try:
-            print(f"[Groq] 解析試行中... ({attempt + 1}/{retries})")
+            print(f"[Groq] 試行中... ({attempt + 1}/{retries})")
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, headers=headers, json=payload, timeout=40.0)
                 response.raise_for_status()
-                res_json = response.json()["choices"][0]["message"]["content"]
-                return json.loads(res_json)
+                return json.loads(response.json()["choices"][0]["message"]["content"])
         except Exception as e:
-            print(f"[Groq] 失敗 (残りリトライ {retries - attempt - 1}): {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(delay)
-            else:
-                raise e
+            print(f"[Groq] 失敗: {e}")
+            if attempt < retries - 1: await asyncio.sleep(delay)
+            else: raise e
+
+async def try_openrouter(image_bytes: bytes, user_hint: str, retries: int = 3, delay: int = 3):
+    if not openrouter_key: raise Exception("OpenRouter API Key missing")
+    full_prompt = get_prompt(user_hint)
+    b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
+    data_url = f"data:image/jpeg;base64,{b64_data}"
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": "google/gemini-2.5-flash:free", # OpenRouter提供の無料Visionモデル
+        "messages": [{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": data_url}}]}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2
+    }
+
+    for attempt in range(retries):
+        try:
+            print(f"[OpenRouter] 試行中... ({attempt + 1}/{retries})")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload, timeout=40.0)
+                response.raise_for_status()
+                return json.loads(response.json()["choices"][0]["message"]["content"])
+        except Exception as e:
+            print(f"[OpenRouter] 失敗: {e}")
+            if attempt < retries - 1: await asyncio.sleep(delay)
+            else: raise e
+
+async def try_cloudflare(image_bytes: bytes, user_hint: str, retries: int = 3, delay: int = 3):
+    if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
+    full_prompt = get_prompt(user_hint)
+    
+    # Cloudflare Workers AI (Llava) の画像受取形式に整形
+    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+    
+    url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
+    headers = {"Authorization": f"Bearer {cloudflare_token}", "Content-Type": "application/json"}
+    
+    # Cloudflareは画像データを数値配列(int array)として受ける仕様に合わせる
+    image_array = list(image_bytes)
+    
+    payload = {
+        "prompt": full_prompt,
+        "image": image_array,
+        "max_tokens": 512
+    }
+
+    for attempt in range(retries):
+        try:
+            print(f"[Cloudflare] 試行中... ({attempt + 1}/{retries})")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload, timeout=50.0)
+                response.raise_for_status()
+                # Cloudflareの戻り値テキストからJSON部分を抽出・パース
+                res_text = response.json()["result"]["description"]
+                # 万が一余計なテキストが入った場合の安全弁
+                json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
+                return json.loads(json_match.group(0)) if json_match else json.loads(res_text)
+        except Exception as e:
+            print(f"[Cloudflare] 失敗: {e}")
+            if attempt < retries - 1: await asyncio.sleep(delay)
+            else: raise e
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
-    if request.method == "HEAD":
-        return HTMLResponse(content="", status_code=200)
+    if request.method == "HEAD": return HTMLResponse(content="", status_code=200)
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/analyze")
@@ -111,36 +164,45 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
     mime_type = file.content_type or "image/jpeg"
     safe_hint = hint if hint else ""
 
-    # 全体が全滅した場合、もう一周最初からリトライを繰り返すための大ループ（最大2周）
+    # 5つのAIが全滅した場合、大ループで最初からもう一周リトライ
     for loop_count in range(2):
-        print(f"--- 解析メインループ第 {loop_count + 1} 周目 ---")
+        print(f"=== 全体メインループ 第 {loop_count + 1} 周目 ===")
         
-        # 1. Gemini Pro (高級モデル) + リトライ
+        # 1. Gemini Pro
         try:
-            data = await try_gemini(image_bytes, mime_type, safe_hint, model_name='gemini-2.5-pro')
+            data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-pro')
             return {"success": True, "reason": data.get("reason"), "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-        except Exception:
-            print("Gemini Pro が失敗しました。Gemini Free (Flash) に切り替えます。")
+        except Exception: print("→ Gemini Pro 失敗。Flashに移行します。")
 
-        # 2. Gemini Free (Flashモデル) + リトライ
+        # 2. Gemini Free (Flash)
         try:
-            data = await try_gemini(image_bytes, mime_type, safe_hint, model_name='gemini-2.5-flash')
-            return {"success": True, "reason": data.get("reason") + " (※無料枠AIで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-        except Exception:
-            print("Gemini Free が失敗しました。別AI (Groq) に切り替えます。")
+            data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-flash')
+            return {"success": True, "reason": data.get("reason") + " (※Flashで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
+        except Exception: print("→ Gemini Free 失敗。Groqに移行します。")
 
-        # 3. 別AI Groq (Llama 3.2 Vision) + リトライ
+        # 3. Groq (Llama)
         try:
             data = await try_groq(image_bytes, safe_hint)
-            return {"success": True, "reason": data.get("reason") + " (※別AI Groqで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-        except Exception:
-            print("Groq も失敗しました。")
-            if loop_count == 0:
-                print("インターバルを置いて、最初からもう一度チャレンジします。")
-                await asyncio.sleep(5) # 次の周に進む前に少し間を置く
+            return {"success": True, "reason": data.get("reason") + " (※Groqで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
+        except Exception: print("→ Groq 失敗。OpenRouterに移行します。")
 
-    # すべてのAI、すべての自動リトライ、全周回が完全に全滅した場合のみエラー通知
+        # 4. OpenRouter (Gemini Free経由など)
+        try:
+            data = await try_openrouter(image_bytes, safe_hint)
+            return {"success": True, "reason": data.get("reason") + " (※OpenRouterで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
+        except Exception: print("→ OpenRouter 失敗。Cloudflareに移行します。")
+
+        # 5. Cloudflare Workers AI
+        try:
+            data = await try_cloudflare(image_bytes, safe_hint)
+            return {"success": True, "reason": data.get("reason") + " (※Cloudflareで解析)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
+        except Exception:
+            print("→ Cloudflare も失敗しました。")
+            if loop_count == 0:
+                print("5秒後に1つ目のAIから再チャレンジします...")
+                await asyncio.sleep(5)
+
     return {
         "success": False, 
-        "message": "すべてのAIサーバーが一時的に制限、または混雑しています。しばらく時間を空けて再度お試しください。"
+        "message": "すべてのAIエンドポイントおよび自動リトライが制限・混雑により全滅しました。APIキーのクォータや設定をご確認ください。"
     }
