@@ -26,7 +26,6 @@ except Exception as e:
     print(f"Gemini Init Error: {e}")
     gemini_client = None
 
-# データ構造の定義（Pydanticモデル）
 class AnalysisDetail(BaseModel):
     topography: str = Field(description="地形の分析結果")
     soil: str = Field(description="土壌・地質の分析結果")
@@ -58,7 +57,6 @@ GEOGRAPHIC_PROMPT = (
 )
 
 async def ask_gemini_geoguessr(image_bytes: bytes, user_hint: str):
-    """メインAI: Google Gemini 2.5 Flash（混雑時の自動リトライ機能付き）"""
     if not gemini_client:
         raise Exception("Gemini API Key is missing.")
     
@@ -71,7 +69,7 @@ async def ask_gemini_geoguessr(image_bytes: bytes, user_hint: str):
         temperature=0.2
     )
     
-    # 🔥 503混雑エラー対策：最大3回まで自動リトライするループ
+    # 🩹 503混雑エラー対策：待機時間を段階的に伸ばす（2秒 → 4秒 → 6秒）
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -82,21 +80,19 @@ async def ask_gemini_geoguessr(image_bytes: bytes, user_hint: str):
             )
             return response.text
         except Exception as e:
-            # エラーメッセージに503やUNAVAILABLEが含まれる場合は混雑と判断
             if "503" in str(e) or "UNAVAILABLE" in str(e):
                 if attempt < max_retries - 1:
-                    print(f"Geminiサーバー混雑(503)を検知。2秒後に自動リトライします... ({attempt + 1}/{max_retries})")
-                    await asyncio.sleep(2)
+                    wait_time = (attempt + 1) * 2  # 2秒、4秒、6秒と増やす
+                    print(f"Gemini混雑(503)を検知。{wait_time}秒後に再試行します... ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
                     continue
             raise e
 
 async def ask_groq_geoguessr(image_bytes: bytes, user_hint: str):
-    """バックアップAI: Groq Cloud (Llama 3.2 11b Vision)"""
     if not groq_key:
         raise Exception("Groq API Key is missing.")
     
     hint_text = f"\n[USER HINT]: {user_hint}\n" if user_hint else ""
-    # JSONのスキーマ構造をテキストで強く指示
     schema_instruction = "\n\nYou MUST respond ONLY in JSON matching this structure: {\"analysis\": {\"topography\":\"...\",\"soil\":\"...\",\"vegetation\":\"...\",\"architecture\":\"...\",\"shadows\":\"...\"}, \"reasoning_logic\":\"...\", \"candidates\": [{\"location\":\"...\",\"probability\":\"...\",\"lat\":0.0,\"lng\":0.0}]}"
     full_prompt = GEOGRAPHIC_PROMPT + hint_text + schema_instruction
     
@@ -132,23 +128,20 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
     used_backup = False
     
     try:
-        # 1. まずメインAI（リトライ付き）を試す
         ai_text_result = await ask_gemini_geoguessr(image_bytes, safe_hint)
     except Exception as e:
         print(f"Geminiエラー (リトライ失敗): {e}")
-        # 2. ダメならバックアップAI（Groq）を試す
         if groq_key:
             try:
                 print("メインAI混雑のため、バックアップAI(Groq)に切り替えます。")
                 ai_text_result = await ask_groq_geoguessr(image_bytes, safe_hint)
                 used_backup = True
             except Exception as e2:
-                return {"success": False, "message": f"AIサーバーが非常に混雑しています。時間を置いて再度お試しください。({e2})"}
+                return {"success": False, "message": f"AIサーバーが混雑しています。時間を置いて再度お試しください。({e2})"}
         else:
             return {"success": False, "message": "現在Google AIが非常に混雑しています。数分後に再度試すか、RenderにGROQ_API_KEYを登録してください。"}
     
     try:
-        # データの解析と安全なバリデーション
         raw_data = json.loads(ai_text_result)
         validated_data = GeoguessrResponseSchema.model_validate(raw_data)
         
