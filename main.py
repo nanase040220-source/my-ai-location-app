@@ -42,19 +42,15 @@ def get_prompt(user_hint: str) -> str:
     )
 
 def extract_json_safe(text: str) -> dict:
-    """AIが返した無骨なテキストから無理やりJSON部分だけを抜き出す安全なパーサー"""
     try:
-        # まずそのままパースを試みる
         return json.loads(text.strip())
     except Exception:
-        # 失敗した場合、テキスト内の最初と最後の { } を探して切り出す
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(0))
             except Exception:
                 pass
-    # 最悪パースが全て失敗した場合のフォールバック
     return {
         "reason": f"AIの応答のパースに失敗しました。生の応答: {text[:100]}...",
         "query_used": "不明",
@@ -71,7 +67,6 @@ async def try_groq(image_bytes: bytes, user_hint: str):
     url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
     
-    # 400エラーの原因になりやすいresponse_formatを敢えて外し、プレーンテキストで回収する
     payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [
@@ -88,7 +83,9 @@ async def try_groq(image_bytes: bytes, user_hint: str):
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload, timeout=20.0)
-        response.raise_for_status()
+        if response.status_code != 200:
+            # APIが返してきた生のエラーメッセージを例外に仕込む
+            raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["choices"][0]["message"]["content"]
         return extract_json_safe(res_text)
 
@@ -120,7 +117,8 @@ async def try_openrouter(image_bytes: bytes, user_hint: str):
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload, timeout=20.0)
-        response.raise_for_status()
+        if response.status_code != 200:
+            raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["choices"][0]["message"]["content"]
         return extract_json_safe(res_text)
 
@@ -140,7 +138,6 @@ async def try_cloudflare(image_bytes: bytes, user_hint: str):
     if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
     full_prompt = get_prompt(user_hint)
     
-    # 最もペイロードサイズ制限に引っかかりにくい「生バイナリ直接送信」の公式形式
     url = f"[https://api.cloudflare.com/client/v4/accounts/](https://api.cloudflare.com/client/v4/accounts/){cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
     headers = {
         "Authorization": f"Bearer {cloudflare_token}",
@@ -148,9 +145,9 @@ async def try_cloudflare(image_bytes: bytes, user_hint: str):
     }
     
     async with httpx.AsyncClient() as client:
-        # プロンプトをURLのクエリパラメータとして逃がし、ボディにバイナリを直撃させる
         response = await client.post(f"{url}?prompt={httpx.URL(full_prompt)}", headers=headers, content=image_bytes, timeout=25.0)
-        response.raise_for_status()
+        if response.status_code != 200:
+            raise Exception(f"Status {response.status_code}: {response.text}")
         res_text = response.json()["result"]["description"]
         return extract_json_safe(res_text)
 
@@ -173,7 +170,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_groq(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※Groq)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Groq 失敗: {str(e)[:60]}。OpenRouterへ切り替えます。")
+        print(f"→ Groq 失敗詳細: {str(e)}")
 
     # 2. OpenRouter
     try:
@@ -181,7 +178,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_openrouter(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※OpenRouter)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ OpenRouter 失敗: {str(e)[:60]}。Gemini Proへ移行します。")
+        print(f"→ OpenRouter 失敗詳細: {str(e)}")
 
     # 3. Gemini Pro
     try:
@@ -189,7 +186,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-pro')
         return {"success": True, "reason": data.get("reason"), "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Gemini Pro 失敗: {str(e)[:60]}。Gemini Flashへ移行します。")
+        print(f"→ Gemini Pro 失敗詳細: {str(e)}")
 
     # 4. Gemini Flash
     try:
@@ -197,7 +194,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-flash')
         return {"success": True, "reason": data.get("reason") + " (※Flash)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Gemini Flash 失敗: {str(e)[:60]}。Cloudflareへ移行します。")
+        print(f"→ Gemini Flash 失敗詳細: {str(e)}")
 
     # 5. Cloudflare Workers AI
     try:
@@ -205,7 +202,7 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
         data = await try_cloudflare(image_bytes, safe_hint)
         return {"success": True, "reason": data.get("reason") + " (※Cloudflare)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
     except Exception as e:
-        print(f"→ Cloudflare 失敗: {str(e)[:60]}")
+        print(f"→ Cloudflare 失敗詳細: {str(e)}")
 
     return {
         "success": False, 
