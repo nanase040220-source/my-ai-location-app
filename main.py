@@ -7,6 +7,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field  # 🔥 追加：エラーを絶対に起こさないためのデータ固定機能
 import httpx
 
 app = FastAPI()
@@ -24,7 +26,26 @@ except Exception as e:
     print(f"Gemini Init Error: {e}")
     gemini_client = None
 
-# 🔥 地理・地形・天文学的特徴を徹底分析させるための超強力プロンプト
+# 🔥 AIの出力形式を100%エラーなく固定するための定義（Pydanticモデル）
+class AnalysisDetail(BaseModel):
+    topography: str = Field(description="地形の分析結果")
+    soil: str = Field(description="土壌・地質の分析結果")
+    vegetation: str = Field(description="植生・植物の分析結果")
+    architecture: str = Field(description="建築様式・インフラの分析結果")
+    shadows: str = Field(description="太陽の光と影の角度・方位の分析結果")
+
+class LocationCandidate(BaseModel):
+    location: str = Field(description="候補の場所・都市・ランドマーク名")
+    probability: str = Field(description="確率（例: 85%）")
+    lat: float = Field(description="緯度")
+    lng: float = Field(description="経度")
+
+class GeoguessrResponseSchema(BaseModel):
+    analysis: AnalysisDetail
+    reasoning_logic: str
+    candidates: list[LocationCandidate]
+
+# 強力な地理特定プロンプト
 GEOGRAPHIC_PROMPT = (
     "You are an expert geoguessr and geographic investigator. Your task is to pinpoint the location of this image by analyzing every single clue systematically.\n\n"
     "STEP 1: Analyze the following elements in extreme detail:\n"
@@ -34,85 +55,26 @@ GEOGRAPHIC_PROMPT = (
     "- Architectural Style (Building materials, roof shapes, infrastructure, utility poles, license plates, road markings)\n"
     "- Sun & Shadows (Estimate the sun's angle and direction to determine the approximate latitude or hemisphere if possible)\n\n"
     "STEP 2: Combine these observations with the user's optional text hint to cross-reference global regions, countries, or specific prefectures.\n\n"
-    "STEP 3: Output your final deduction. You MUST respond ONLY in the following strict JSON format. No conversational filler, no markdown wrappers outside JSON:\n"
-    "{\n"
-    "  \"analysis\": {\n"
-    "    \"topography\": \"地形の分析結果（日本語）\",\n"
-    "    \"soil\": \"土壌・地質の分析結果（日本語）\",\n"
-    "    \"vegetation\": \"植生・植物の分析結果（日本語）\",\n"
-    "    \"architecture\": \"建築様式・インフラの分析結果（日本語）\",\n"
-    "    \"shadows\": \"太陽の光と影の角度・方位の分析結果（日本語）\"\n"
-    "  },\n"
-    "  \"reasoning_logic\": \"これらを総合して、なぜその結論に至ったかの大まかな地理的・論理的考察（日本語）\",\n"
-    "  \"candidates\": [\n"
-    "    {\n"
-    "      \"location\": \"第1候補の具体的な場所・都市・ランドマーク名（日本語）\",\n"
-    "      \"probability\": \"85%\",\n"
-    "      \"lat\": 35.6586,\n"
-    "      \"lng\": 139.7454\n"
-    "    },\n"
-    "    {\n"
-    "      \"location\": \"第2候補の具体的な場所・都市・ランドマーク名（日本語）\",\n"
-    "      \"probability\": \"40%\",\n"
-    "      \"lat\": 35.6605,\n"
-    "      \"lng\": 139.7291\n"
-    "    },\n"
-    "    {\n"
-    "      \"location\": \"第3候補の具体的な場所・都市・ランドマーク名（日本語）\",\n"
-    "      \"probability\": \"15%\",\n"
-    "      \"lat\": 35.7101,\n"
-    "      \"lng\": 139.8107\n"
-    "    }\n"
-    "  ]\n"
-    "}"
+    "STEP 3: Output your final deduction strictly following the schema structure."
 )
 
 async def ask_gemini_geoguessr(image_bytes: bytes, user_hint: str):
     if not gemini_client:
         raise Exception("Gemini API Key is missing.")
     
-    # ユーザーのヒントをプロンプトに動的挿入
     hint_text = f"\n[USER HINT]: {user_hint}\n" if user_hint else ""
     full_prompt = GEOGRAPHIC_PROMPT + hint_text
 
-    config = genai.types.GenerateContentConfig(
+    # 🔥 response_schemaにPydanticモデルを指定することで、AIのデータ崩れによるエラーを完全に防ぎます
+    config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_schema={
-            "type": "OBJECT",
-            "properties": {
-                "analysis": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "topography": {"type": "STRING"},
-                        "soil": {"type": "STRING"},
-                        "vegetation": {"type": "STRING"},
-                        "architecture": {"type": "STRING"},
-                        "shadows": {"type": "STRING"}
-                    },
-                    "required": ["topography", "soil", "vegetation", "architecture", "shadows"]
-                },
-                "reasoning_logic": {"type": "STRING"},
-                "candidates": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "location": {"type": "STRING"},
-                            "probability": {"type": "STRING"},
-                            "lat": {"type": "NUMBER"},
-                            "lng": {"type": "NUMBER"}
-                        },
-                        "required": ["location", "probability", "lat", "lng"]
-                    }
-                }
-            },
-            "required": ["analysis", "reasoning_logic", "candidates"]
-        }
+        response_schema=GeoguessrResponseSchema,
+        temperature=0.2
     )
     
     response = await gemini_client.aio.models.generate_content(
         model='gemini-2.5-flash',
-        contents=[genai.types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'), full_prompt],
+        contents=[types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'), full_prompt],
         config=config
     )
     return response.text
@@ -124,11 +86,12 @@ async def read_index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.post("/analyze")
-async def analyze_image(file: UploadFile = File(...), hint: str = Form("")):
+async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
     image_bytes = await file.read()
+    safe_hint = hint if hint else ""
     
     try:
-        ai_text_result = await ask_gemini_geoguessr(image_bytes, hint)
+        ai_text_result = await ask_gemini_geoguessr(image_bytes, safe_hint)
         ai_data = json.loads(ai_text_result)
         
         return {
