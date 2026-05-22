@@ -29,27 +29,49 @@ print("===========================")
 def get_prompt(user_hint: str) -> str:
     hint_text = f"\n[ユーザーからのヒント・情報]: {user_hint}" if user_hint else ""
     return (
-        "【IMPORTANT: RESPONSE MUST BE A VALID JSON OBJECT】\n"
         "画像とユーザーからの追加ヒントを組み合わせて、場所を特定してください。\n"
-        "必ず以下のJSONフォーマットのみで返してください。他の挨拶や説明は一切含めないでください。\n"
+        "出力は必ず次のJSON文字列のみにしてください。前後の挨拶、コードブロック(```json)、説明は一切含めないでください。\n"
         "{\n"
         "  \"reason\": \"推論の理由（日本語）\",\n"
         "  \"query_used\": \"検索に使ったキーワード\",\n"
         "  \"location\": \"特定された住所や地名\",\n"
-        "  \"lat\": 緯度(float),\n"
-        "  \"lng\": 経度(float)\n"
+        "  \"lat\": 35.6895,\n"
+        "  \"lng\": 139.6917\n"
         "}"
         f"{hint_text}"
     )
 
+def extract_json_safe(text: str) -> dict:
+    """AIが返した無骨なテキストから無理やりJSON部分だけを抜き出す安全なパーサー"""
+    try:
+        # まずそのままパースを試みる
+        return json.loads(text.strip())
+    except Exception:
+        # 失敗した場合、テキスト内の最初と最後の { } を探して切り出す
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except Exception:
+                pass
+    # 最悪パースが全て失敗した場合のフォールバック
+    return {
+        "reason": f"AIの応答のパースに失敗しました。生の応答: {text[:100]}...",
+        "query_used": "不明",
+        "location": "パースエラーエリア",
+        "lat": 35.6895,
+        "lng": 139.6917
+    }
+
 async def try_groq(image_bytes: bytes, user_hint: str):
     if not groq_key: raise Exception("Groq Key missing")
     full_prompt = get_prompt(user_hint)
-    b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
+    b64_data = base64.b64encode(image_bytes).decode('utf-8')
     
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
     
+    # 400エラーの原因になりやすいresponse_formatを敢えて外し、プレーンテキストで回収する
     payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [
@@ -61,31 +83,30 @@ async def try_groq(image_bytes: bytes, user_hint: str):
                 ]
             }
         ],
-        "response_format": {"type": "json_object"}, # プロンプト内に「JSON」の文字が必須
         "temperature": 0.2,
         "max_tokens": 1024
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload, timeout=20.0)
         response.raise_for_status()
-        return json.loads(response.json()["choices"][0]["message"]["content"])
+        res_text = response.json()["choices"][0]["message"]["content"]
+        return extract_json_safe(res_text)
 
 async def try_openrouter(image_bytes: bytes, user_hint: str):
     if not openrouter_key: raise Exception("OpenRouter Key missing")
     full_prompt = get_prompt(user_hint)
-    b64_data = base64.b64encode(image_bytes).decode('utf-8').replace('\n', '').replace('\r', '')
+    b64_data = base64.b64encode(image_bytes).decode('utf-8')
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    # OpenRouterの要件に合わせてReferer等のヘッダーを追加
+    url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
     headers = {
         "Authorization": f"Bearer {openrouter_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://render.com", 
+        "HTTP-Referer": "[https://render.com](https://render.com)",
         "X-Title": "AI Location App"
     }
     
     payload = {
-        "model": "google/gemini-2.5-flash:free",
+        "model": "meta-llama/llama-3.2-11b-vision-instruct:free",
         "messages": [
             {
                 "role": "user",
@@ -95,13 +116,13 @@ async def try_openrouter(image_bytes: bytes, user_hint: str):
                 ]
             }
         ],
-        "response_format": {"type": "json_object"},
         "temperature": 0.2
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload, timeout=20.0)
         response.raise_for_status()
-        return json.loads(response.json()["choices"][0]["message"]["content"])
+        res_text = response.json()["choices"][0]["message"]["content"]
+        return extract_json_safe(res_text)
 
 async def try_gemini(image_bytes: bytes, mime_type: str, user_hint: str, model_name: str):
     if not gemini_key: raise Exception("Gemini Key is missing")
@@ -119,20 +140,19 @@ async def try_cloudflare(image_bytes: bytes, user_hint: str):
     if not cloudflare_token or not cloudflare_account_id: raise Exception("Cloudflare Credentials missing")
     full_prompt = get_prompt(user_hint)
     
-    # Cloudflare Workers AIで最も確実な「バイナリ直接POST ＋ クエリプロンプト」形式に変更
-    url = f"https://api.cloudflare.com/client/v4/accounts/{cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
+    # 最もペイロードサイズ制限に引っかかりにくい「生バイナリ直接送信」の公式形式
+    url = f"[https://api.cloudflare.com/client/v4/accounts/](https://api.cloudflare.com/client/v4/accounts/){cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
     headers = {
         "Authorization": f"Bearer {cloudflare_token}",
-        "Content-Type": "application/octet-stream" # バイナリデータとして送信
+        "Content-Type": "application/octet-stream"
     }
     
     async with httpx.AsyncClient() as client:
-        # URLのクエリパラメータとしてプロンプトを渡す、ボディには画像バイナリをそのまま流す
+        # プロンプトをURLのクエリパラメータとして逃がし、ボディにバイナリを直撃させる
         response = await client.post(f"{url}?prompt={httpx.URL(full_prompt)}", headers=headers, content=image_bytes, timeout=25.0)
         response.raise_for_status()
         res_text = response.json()["result"]["description"]
-        json_match = re.search(r'\{.*\}', res_text, re.DOTALL)
-        return json.loads(json_match.group(0)) if json_match else json.loads(res_text)
+        return extract_json_safe(res_text)
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_index(request: Request):
