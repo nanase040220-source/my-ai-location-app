@@ -38,7 +38,7 @@
         .rank-1 .prob-badge { background: #fef2f2; color: #991b1b; }
 
         .btn-group { display: flex; gap: 8px; }
-        .verify-btn { flex: 1; padding: 8px; font-size: 12px; background: #475569; text-align: center; color: white; text-decoration: none; border-radius: 4px; }
+        .verify-btn { flex: 1; padding: 8px; font-size: 12px; background: #475569; text-align: center; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; }
         .verify-btn:hover { background: #334155; }
         .btn-img { background: #ea580c; } .btn-img:hover { background: #c2410c; }
         .btn-sv { background: #0d9488; } .btn-sv:hover { background: #0f766e; }
@@ -86,7 +86,7 @@
                 <p id="anArchi"></p>
             </div>
             <div class="analysis-card">
-                <h5>☀️ 太陽光・影 of 角度 (Sun & Shadow)</h5>
+                <h5>☀️ 太陽光・影の角度 (Sun & Shadow)</h5>
                 <p id="anShadow"></p>
             </div>
             <div class="analysis-card full-width">
@@ -181,7 +181,7 @@
                     const encodedLocation = encodeURIComponent(candidate.location);
                     const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodedLocation}`;
                     
-                    // 🔥 修正：Google公式インテント形式の正しいストリートビューURLに変更
+                    // 🗺️ 修正：Google公式の正しい共有用ストリートビューURLを生成
                     const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${candidate.lat},${candidate.lng}`;
 
                     const li = document.createElement('li');
