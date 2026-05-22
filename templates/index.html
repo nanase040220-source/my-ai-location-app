@@ -42,7 +42,7 @@
     
     <button id="uploadBtn">AIと地図で場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが解析中...（混雑時は少し時間がかかります）</div>
+    <div class="loading" id="loadingText">⏳ AIが解析中...（数十秒かかる場合があります）</div>
 
     <div id="resultArea" class="result-box">
         <h3 style="margin-top:0; color: #2b6cb0;">📍 検索・特定結果</h3>
@@ -68,6 +68,36 @@
         let map = null;
         let marker = null;
 
+        // 🚀 送信直前に画像を最適化（リサイズ＆軽量JPEG化）してエラーを絶対に防ぐ魔法
+        function compressImage(file, maxWidth = 1000, quality = 0.85) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let w = img.width;
+                        let h = img.height;
+                        
+                        if (w > maxWidth || h > maxWidth) {
+                            if (w > h) { h = Math.round((h * maxWidth) / w); w = maxWidth; }
+                            else { w = Math.round((w * maxWidth) / h); h = maxWidth; }
+                        }
+                        canvas.width = w; 
+                        canvas.height = h;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, w, h);
+                        
+                        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality);
+                    };
+                    img.onerror = (err) => reject(err);
+                };
+                reader.onerror = (err) => reject(err);
+            });
+        }
+
         uploadBtn.addEventListener('click', async () => {
             const file = imageInput.files[0];
             if (!file) {
@@ -80,9 +110,12 @@
             resultArea.style.display = 'none';
 
             try {
+                // 1. 画像をブラウザ側で安全なサイズに圧縮
+                const safeBlob = await compressImage(file);
+                
                 const formData = new FormData();
-                formData.append('file', file);
-                formData.append('hint', hintInput.value); // 情報をサーバーへ送信
+                formData.append('file', safeBlob, 'image.jpg');
+                formData.append('hint', hintInput.value);
 
                 const response = await fetch('/analyze', { method: 'POST', body: formData });
                 const result = await response.json();
@@ -93,7 +126,7 @@
 
                 resultArea.style.display = 'block';
                 resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
-                resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
+                resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style=\"color:#c53030\">${result.query_used}</span>`;
                 resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
 
                 const lat = result.lat;
