@@ -3,82 +3,100 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI & Map ハイブリッド検索</title>
+    <title>地理・地形特化 AIロケーター</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; color: #333; }
-        .container { max-width: 700px; background: white; padding: 30px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0f172a; margin: 0; padding: 20px; color: #f8fafc; }
+        .container { max-width: 800px; background: #1e293b; padding: 30px; margin: 0 auto; border-radius: 16px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); }
+        h1 { text-align: center; color: #38bdf8; margin-bottom: 25px; font-size: 24px; }
         .form-group { margin-bottom: 20px; }
-        input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
+        label { font-weight: bold; display: block; margin-bottom: 8px; color: #94a3b8; }
+        input[type="file"] { width: 100%; padding: 12px; background: #0f172a; border: 2px dashed #334155; border-radius: 8px; color: #94a3b8; cursor: pointer; box-sizing: border-box; }
+        textarea { width: 100%; height: 70px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #f8fafc; box-sizing: border-box; resize: vertical; }
+        textarea:focus { border-color: #38bdf8; outline: none; }
+        button { width: 100%; background: #0284c7; color: white; border: none; padding: 14px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #0369a1; }
+        button:disabled { background: #334155; cursor: not-allowed; }
+        .loading { text-align: center; color: #38bdf8; display: none; margin-top: 15px; font-weight: bold; }
         
-        /* 🔥 追加：テキスト入力エリアのスタイル */
-        textarea { 
-            width: 100%; height: 80px; padding: 12px; border: 1px solid #cbd5e0; 
-            border-radius: 8px; box-sizing: border-box; resize: vertical;
-            font-family: inherit; font-size: 14px;
-        }
-        textarea:focus { border-color: #2b6cb0; outline: none; }
+        .result-box { margin-top: 25px; padding: 20px; border-radius: 12px; background: #0f172a; border: 1px solid #334155; display: none; }
+        
+        /* 🔥 地理分析データ用のカード型スタイル */
+        .analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+        .analysis-card { background: #1e293b; padding: 12px; border-radius: 8px; border-left: 4px solid #38bdf8; }
+        .analysis-card h5 { margin: 0 0 5px 0; color: #38bdf8; font-size: 14px; }
+        .analysis-card p { margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.4; }
+        .full-width { grid-column: span 2; border-left-color: #a855f7; }
 
-        button { 
-            width: 100%; background: #2b6cb0; color: white; border: none; padding: 14px; 
-            font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; 
-        }
-        button:hover { background: #2c5282; }
-        button:disabled { background: #cbd5e0; cursor: not-allowed; }
-        .loading { text-align: center; color: #718096; display: none; margin-top: 15px; font-weight: bold; }
-        .result-box { margin-top: 25px; padding: 20px; border-radius: 8px; background: #f7fafc; border: 1px solid #e2e8f0; display: none; }
-        #map { height: 350px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #cbd5e0; }
-        
         .candidate-list { list-style: none; padding: 0; margin: 15px 0; }
-        .candidate-item { 
-            padding: 15px; margin-bottom: 12px; border-radius: 6px; 
-            background: white; border-left: 5px solid #cbd5e0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-        .candidate-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .rank-1 { border-left-color: #e53e3e; }
-        .rank-2 { border-left-color: #3182ce; }
-        .rank-3 { border-left-color: #38a169; }
-        .prob-badge { font-weight: bold; padding: 2px 8px; border-radius: 12px; background: #edf2f7; color: #4a5568; }
-        .rank-1 .prob-badge { background: #fed7d7; color: #9b2c2c; }
+        .candidate-item { padding: 15px; margin-bottom: 12px; border-radius: 8px; background: #1e293b; border-left: 5px solid #64748b; }
+        .candidate-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .rank-1 { border-left-color: #ef4444; }
+        .rank-2 { border-left-color: #3b82f6; }
+        .rank-3 { border-left-color: #10b981; }
+        .prob-badge { font-weight: bold; padding: 2px 10px; border-radius: 20px; background: #334155; color: #cbd5e1; }
+        .rank-1 .prob-badge { background: #fef2f2; color: #991b1b; }
 
-        .btn-group { display: flex; gap: 8px; margin-top: 5px; }
-        .verify-btn { 
-            flex: 1; padding: 8px; font-size: 12px; font-weight: normal; background: #4a5568; text-align: center;
-            color: white; text-decoration: none; border-radius: 4px; transition: background 0.2s;
-        }
-        .verify-btn:hover { background: #2d3748; }
-        .btn-img { background: #dd6b20; } 
-        .btn-img:hover { background: #c05621; }
-        .btn-sv { background: #319795; }  
-        .btn-sv:hover { background: #234e52; }
+        .btn-group { display: flex; gap: 8px; }
+        .verify-btn { flex: 1; padding: 8px; font-size: 12px; background: #475569; text-align: center; color: white; text-decoration: none; border-radius: 4px; }
+        .verify-btn:hover { background: #334155; }
+        .btn-img { background: #ea580c; } .btn-img:hover { background: #c2410c; }
+        .btn-sv { background: #0d9488; } .btn-sv:hover { background: #0f766e; }
+        
+        #map { height: 380px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #334155; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>AI & Map Hybrid Finder 📍</h1>
+    <h1>🌍 地理・地形特化型 AI探偵システム</h1>
     
     <div class="form-group">
-        <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真をアップロード：</label>
+        <label for="imageInput">写真をアップロード：</label>
         <input type="file" id="imageInput" accept="image/*">
     </div>
 
     <div class="form-group">
-        <label for="hintInput" style="font-weight: bold; display: block; margin-bottom: 8px;">追加情報・ヒント（任意）：</label>
-        <textarea id="hintInput" placeholder="例: 東京都内、近くに踏切がある、看板に『〇〇』と書いてある、など分かる情報を入力すると精度が上がります。"></textarea>
+        <label for="hintInput">既知のヒント（言語、国、気候など）：</label>
+        <textarea id="hintInput" placeholder="例: ヨーロッパのどこか、ガードレールが白い、などAIの手がかりになる情報"></textarea>
     </div>
     
-    <button id="uploadBtn">AIと地図で場所を特定する</button>
+    <button id="uploadBtn">大地の特徴から場所を特定する</button>
 
-    <div class="loading" id="loadingText">⏳ AIが情報をもとに候補地を算出中...</div>
+    <div class="loading" id="loadingText">⏳ AIが地形・土壌・植生・太陽の影をディープに分析中...</div>
 
     <div id="resultArea" class="result-box">
-        <h3 style="margin-top:0; color: #2b6cb0;">📍 予測・特定結果</h3>
-        <p id="resReason"></p>
+        <h3 style="margin-top:0; color: #38bdf8;">📊 科学的・地理的分析結果</h3>
         
-        <h4 style="margin-bottom: 5px; color: #4a5568;">🗺️ 可能性のある場所リスト</h4>
+        <div class="analysis-grid">
+            <div class="analysis-card">
+                <h5>⛰️ 地形・地勢 (Topography)</h5>
+                <p id="anTopo"></p>
+            </div>
+            <div class="analysis-card">
+                <h5>🪨 土壌・地質 (Soil & Rock)</h5>
+                <p id="anSoil"></p>
+            </div>
+            <div class="analysis-card">
+                <h5>🌿 植生・バイオーム (Vegetation)</h5>
+                <p id="anVeg"></p>
+            </div>
+            <div class="analysis-card">
+                <h5>🏠 建築・インフラ (Architecture)</h5>
+                <p id="anArchi"></p>
+            </div>
+            <div class="analysis-card">
+                <h5>☀️ 太陽光・影の角度 (Sun & Shadow)</h5>
+                <p id="anShadow"></p>
+            </div>
+            <div class="analysis-card full-width">
+                <h5>🧠 総合推論ロジック (Reasoning)</h5>
+                <p id="resLogic"></p>
+            </div>
+        </div>
+        
+        <h4 style="margin-bottom: 5px; color: #94a3b8;">🗺️ 推定される候補地リスト</h4>
         <ul id="candidateList" class="candidate-list"></ul>
         
         <div id="map"></div>
@@ -88,11 +106,17 @@
 <script>
     document.addEventListener("DOMContentLoaded", () => {
         const imageInput = document.getElementById('imageInput');
-        const hintInput = document.getElementById('hintInput'); // 🔥 追加
+        const hintInput = document.getElementById('hintInput');
         const uploadBtn = document.getElementById('uploadBtn');
         const loadingText = document.getElementById('loadingText');
         const resultArea = document.getElementById('resultArea');
-        const resReason = document.getElementById('resReason');
+        
+        const anTopo = document.getElementById('anTopo');
+        const anSoil = document.getElementById('anSoil');
+        const anVeg = document.getElementById('anVeg');
+        const anArchi = document.getElementById('anArchi');
+        const anShadow = document.getElementById('anShadow');
+        const resLogic = document.getElementById('resLogic');
         const candidateList = document.getElementById('candidateList');
         
         let map = null;
@@ -116,10 +140,7 @@
 
         uploadBtn.addEventListener('click', async () => {
             const file = imageInput.files[0];
-            if (!file) {
-                alert('写真を選択してください！');
-                return;
-            }
+            if (!file) { alert('写真を選択してください！'); return; }
 
             uploadBtn.disabled = true;
             loadingText.style.display = 'block';
@@ -128,18 +149,23 @@
 
             const formData = new FormData();
             formData.append('file', file);
-            formData.append('hint', hintInput.value); // 🔥 テキストヒントをサーバーへ送る
+            formData.append('hint', hintInput.value);
 
             try {
                 const response = await fetch('/analyze', { method: 'POST', body: formData });
                 const result = await response.json();
 
-                if (!response.ok || !result.success) {
-                    throw new Error(result.message || '解析に失敗しました。');
-                }
+                if (!response.ok || !result.success) throw new Error(result.message || '解析に失敗しました。');
 
                 resultArea.style.display = 'block';
-                resReason.innerHTML = `<strong>AIの推理ロジック:</strong><br>${result.reason}`;
+                
+                // データのマッピング
+                anTopo.innerText = result.analysis.topography;
+                anSoil.innerText = result.analysis.soil;
+                anVeg.innerText = result.analysis.vegetation;
+                anArchi.innerText = result.analysis.architecture;
+                anShadow.innerText = result.analysis.shadows;
+                resLogic.innerText = result.reasoning_logic;
 
                 if (map === null) {
                     map = L.map('map');
@@ -150,12 +176,10 @@
 
                 markersGroup.forEach(m => map.removeLayer(m));
                 markersGroup = [];
-
                 const bounds = [];
 
                 result.candidates.forEach((candidate, index) => {
                     const rank = index + 1;
-                    
                     const encodedLocation = encodeURIComponent(candidate.location);
                     const googleImagesUrl = `https://www.google.com/search?tbm=isch&q=${encodedLocation}`;
                     const streetViewUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${candidate.lat},${candidate.lng}`;
@@ -168,8 +192,8 @@
                             <span class="prob-badge">${candidate.probability}</span>
                         </div>
                         <div class="btn-group">
-                            <a href="${googleImagesUrl}" target="_blank" class="verify-btn btn-img">🔍 Google画像検索で確認</a>
-                            <a href="${streetViewUrl}" target="_blank" class="verify-btn btn-sv">🚗 ストリートビューを開く</a>
+                            <a href="${googleImagesUrl}" target="_blank" class="verify-btn btn-img">🔍 画像検索</a>
+                            <a href="${streetViewUrl}" target="_blank" class="verify-btn btn-sv">🚗 周辺のストリートビュー</a>
                         </div>
                     `;
                     candidateList.appendChild(li);
@@ -182,13 +206,11 @@
                     markersGroup.push(marker);
                     bounds.push([candidate.lat, candidate.lng]);
                     
-                    if (index === 0) {
-                        marker.openPopup();
-                    }
+                    if (index === 0) marker.openPopup();
                 });
 
                 if (bounds.length > 0) {
-                    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+                    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
                 }
                 
                 setTimeout(() => { map.invalidateSize(); }, 200);
@@ -202,6 +224,5 @@
         });
     });
 </script>
-
 </body>
 </html>
