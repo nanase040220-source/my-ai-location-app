@@ -12,6 +12,15 @@ from google.genai import types
 import httpx
 
 app = FastAPI()
+# 🔍 起動時に環境変数のチェック状態をログに出す（セキュリティのため最初の3文字だけ表示）
+print("=== 🛠️ 環境変数 接続診断 ===")
+for key in ["GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]:
+    val = os.environ.get(key)
+    if val:
+        print(f"✅ {key}: 認識されています (先頭: {val[:3]}...)")
+    else:
+        print(f"❌ {key}: 見つかりません。設定されていません。")
+print("===========================")
 templates = Jinja2Templates(directory="templates")
 
 # 各種APIキー・環境変数の取得
