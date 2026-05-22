@@ -11,7 +11,9 @@
         .container { max-width: 700px; background: white; padding: 30px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #4a5568; margin-bottom: 25px; }
         .form-group { margin-bottom: 20px; }
+        label { font-weight: bold; display: block; margin-bottom: 8px; color: #4a5568; }
         input[type="file"] { width: 100%; padding: 10px; border: 2px dashed #cbd5e0; border-radius: 8px; cursor: pointer; box-sizing: border-box; }
+        textarea { width: 100%; height: 80px; padding: 12px; border: 1px solid #cbd5e0; border-radius: 8px; box-sizing: border-box; resize: vertical; font-size: 14px; }
         button { 
             width: 100%; background: #2b6cb0; color: white; border: none; padding: 14px; 
             font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.2s; 
@@ -29,8 +31,13 @@
     <h1>AI & Map Hybrid Finder 📍</h1>
     
     <div class="form-group">
-        <label for="imageInput" style="font-weight: bold; display: block; margin-bottom: 8px;">写真をアップロード：</label>
+        <label for="imageInput">写真をアップロード：</label>
         <input type="file" id="imageInput" accept="image/*">
+    </div>
+
+    <div class="form-group">
+        <label for="hintInput">追加の情報・ヒント（言語、国、気候、見えている文字など）：</label>
+        <textarea id="hintInput" placeholder="例: ヨーロッパっぽい、道路の標識にフランス語が書いてある、などAIの手がかりになる情報"></textarea>
     </div>
     
     <button id="uploadBtn">AIと地図で場所を特定する</button>
@@ -50,6 +57,7 @@
 <script>
     document.addEventListener("DOMContentLoaded", () => {
         const imageInput = document.getElementById('imageInput');
+        const hintInput = document.getElementById('hintInput');
         const uploadBtn = document.getElementById('uploadBtn');
         const loadingText = document.getElementById('loadingText');
         const resultArea = document.getElementById('resultArea');
@@ -59,38 +67,6 @@
         
         let map = null;
         let marker = null;
-
-        // 🚀 画像を送信前に超軽量化（JPEG変換）してGroqの400エラーを防ぐ魔法の処理
-        function compressImage(file, maxWidth = 800, quality = 0.7) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = (e) => {
-                    const img = new Image();
-                    img.src = e.target.result;
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        let w = img.width;
-                        let h = img.height;
-                        
-                        // 画像が大きすぎる場合は縮小
-                        if (w > maxWidth || h > maxWidth) {
-                            if (w > h) { h = Math.round((h * maxWidth) / w); w = maxWidth; }
-                            else { w = Math.round((w * maxWidth) / h); h = maxWidth; }
-                        }
-                        canvas.width = w; 
-                        canvas.height = h;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, w, h);
-                        
-                        // 軽量なJPEGとして出力
-                        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality);
-                    };
-                    img.onerror = (err) => reject(err);
-                };
-                reader.onerror = (err) => reject(err);
-            });
-        }
 
         uploadBtn.addEventListener('click', async () => {
             const file = imageInput.files[0];
@@ -104,12 +80,9 @@
             resultArea.style.display = 'none';
 
             try {
-                // 1. まずブラウザ側で画像を軽量化（10MBのスクショも数十KBになります）
-                const safeBlob = await compressImage(file);
-                
                 const formData = new FormData();
-                // 2. 日本語ファイル名によるエラーも防ぐため、名前を固定して送信
-                formData.append('file', safeBlob, 'safe_image.jpg');
+                formData.append('file', file);
+                formData.append('hint', hintInput.value); // 情報をサーバーへ送信
 
                 const response = await fetch('/analyze', { method: 'POST', body: formData });
                 const result = await response.json();
@@ -120,7 +93,7 @@
 
                 resultArea.style.display = 'block';
                 resReason.innerHTML = `<strong>AIの推理:</strong> ${result.reason}`;
-                resQuery.innerHTML = `<strong>検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
+                resQuery.innerHTML = `<strong>使用した検索ワード:</strong> <span style="color:#c53030">${result.query_used}</span>`;
                 resAddress.innerHTML = `<strong>特定された住所:</strong> ${result.location}`;
 
                 const lat = result.lat;
