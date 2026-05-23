@@ -20,10 +20,18 @@ groq_key = os.environ.get("GROQ_API_KEY")
 openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 cloudflare_token = os.environ.get("CLOUDFLARE_API_TOKEN")
 cloudflare_account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+geoseer_key = os.environ.get("GEOSEER_API_KEY")  # GeoSeerのAPIキーを追加
 
 print("=== 🛠️ 環境変数 接続診断 ===")
-for k, v in [("GEMINI_API_KEY", gemini_key), ("GROQ_API_KEY", groq_key), ("OPENROUTER_API_KEY", openrouter_key), ("CLOUDFLARE_API_TOKEN", cloudflare_token), ("CLOUDFLARE_ACCOUNT_ID", cloudflare_account_id)]:
-    print(f"✅ {k}: 認識中 (先頭: {v[:3]}...)" if v else f"❌ {k}: 未設定")
+for k, v in [
+    ("GEMINI_API_KEY", gemini_key), 
+    ("GROQ_API_KEY", groq_key), 
+    ("OPENROUTER_API_KEY", openrouter_key), 
+    ("CLOUDFLARE_API_TOKEN", cloudflare_token), 
+    ("CLOUDFLARE_ACCOUNT_ID", cloudflare_account_id),
+    ("GEOSEER_API_KEY", geoseer_key)
+]:
+    print(f"✅ {k}: 認識中 (先頭: {v[:3]}...)" if v else f"❌ {k}: 未設定（GeoSeer併用はスキップされます）")
 print("===========================")
 
 def get_prompt(user_hint: str) -> str:
@@ -33,7 +41,7 @@ def get_prompt(user_hint: str) -> str:
         "出力は必ず次のJSON文字列のみにしてください。前後の挨拶、コードブロック(```json)、説明は一切含めないでください。\n"
         "{\n"
         "  \"reason\": \"推論の理由（日本語）\",\n"
-        "  \"query_used\": \"検索に使ったキーワード\",\n"
+        "  \"query_used\": \"検索に使ったキーワード（地名、施設名など具体的なもの）\",\n"
         "  \"location\": \"特定された住所や地名\",\n"
         "  \"lat\": 35.6895,\n"
         "  \"lng\": 139.6917\n"
@@ -59,12 +67,53 @@ def extract_json_safe(text: str) -> dict:
         "lng": 139.6917
     }
 
+async def enhance_with_geoseer(ai_data: dict) -> dict:
+    """AIが特定したキーワード（query_used）を使い、GeoSeer APIで空間データ情報を検索・補強する"""
+    if not geoseer_key:
+        print("[GeoSeer] APIキーが設定されていないため、検索をスキップします。")
+        return ai_data
+
+    query = ai_data.get("query_used")
+    if not query or query == "不明":
+        query = ai_data.get("location")
+
+    print(f"[GeoSeer] キーワード '{query}' で空間サービスを検索中...")
+    
+    # GeoSeerのWMS/WFS等レイヤー検索エンドポイント（仕様に合わせた一般的なリクエスト構造）
+    url = "[https://www.geoseer.net/api/](https://www.geoseer.net/api/)"
+    params = {
+        "q": query,
+        "key": geoseer_key,
+        "format": "json"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=10.0)
+            if response.status_code == 200:
+                res_json = response.json()
+                # 検索結果が存在する場合、最初のヒット情報を理由（reason）に書き加える
+                results = res_json.get("results", [])
+                if results:
+                    top_hit = results[0]
+                    title = top_hit.get("title", "不明なレイヤー")
+                    service_url = top_hit.get("url", "")
+                    ai_data["reason"] += f" \n[GeoSeer補強情報]: 関連する地理空間データが見つかりました（データ名: {title}）。ソースURL: {service_url}"
+                    print("→ [GeoSeer] 空間データの紐付けに成功しました。")
+                else:
+                    print("→ [GeoSeer] 該当する空間データは見つかりませんでした。")
+            else:
+                print(f"→ [GeoSeer] 検索失敗（ステータスコード: {response.status_code}）")
+    except Exception as e:
+        print(f"→ [GeoSeer] 通信エラー: {str(e)}")
+        
+    return ai_data
+
 async def try_groq(image_bytes: bytes, user_hint: str):
     if not groq_key: raise Exception("Groq Key missing")
     full_prompt = get_prompt(user_hint)
     b64_data = base64.b64encode(image_bytes).decode('utf-8')
     
-    # 絶対パスでクライアントを動かす
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
@@ -143,7 +192,6 @@ async def try_cloudflare(image_bytes: bytes, user_hint: str):
     
     url = f"[https://api.cloudflare.com/client/v4/accounts/](https://api.cloudflare.com/client/v4/accounts/){cloudflare_account_id}/ai/run/@cf/llava-v1.5-7b-vision-preview"
     
-    # URLパラメータの改行バグを完全に排除し、標準的なJSONで安全に送る
     async with httpx.AsyncClient() as client:
         response = await client.post(
             url, 
@@ -171,46 +219,64 @@ async def analyze_image(file: UploadFile = File(...), hint: str = Form(None)):
     safe_hint = hint if hint else ""
 
     print("=== 高速フォールバック・ループ開始 ===")
+    data = None
+    provider_suffix = ""
     
     # 1. Groq
     try:
         print("[1番手: Groq] 試行中...")
         data = await try_groq(image_bytes, safe_hint)
-        return {"success": True, "reason": data.get("reason") + " (※Groq)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
+        provider_suffix = " (※Groq)"
     except Exception as e:
         print(f"→ Groq 失敗詳細: {str(e)}")
 
     # 2. OpenRouter
-    try:
-        print("[2番手: OpenRouter] 試行中...")
-        data = await try_openrouter(image_bytes, safe_hint)
-        return {"success": True, "reason": data.get("reason") + " (※OpenRouter)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-    except Exception as e:
-        print(f"→ OpenRouter 失敗詳細: {str(e)}")
+    if not data:
+        try:
+            print("[2番手: OpenRouter] 試行中...")
+            data = await try_openrouter(image_bytes, safe_hint)
+            provider_suffix = " (※OpenRouter)"
+        except Exception as e:
+            print(f"→ OpenRouter 失敗詳細: {str(e)}")
 
     # 3. Gemini Pro
-    try:
-        print("[3番手: Gemini Pro] 試行中...")
-        data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-pro')
-        return {"success": True, "reason": data.get("reason"), "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-    except Exception as e:
-        print(f"→ Gemini Pro 失敗詳細: {str(e)}")
+    if not data:
+        try:
+            print("[3番手: Gemini Pro] 試行中...")
+            data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-pro')
+            provider_suffix = ""
+        except Exception as e:
+            print(f"→ Gemini Pro 失敗詳細: {str(e)}")
 
     # 4. Gemini Flash
-    try:
-        print("[4番手: Gemini Flash] 試行中...")
-        data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-flash')
-        return {"success": True, "reason": data.get("reason") + " (※Flash)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-    except Exception as e:
-        print(f"→ Gemini Flash 失敗詳細: {str(e)}")
+    if not data:
+        try:
+            print("[4番手: Gemini Flash] 試行中...")
+            data = await try_gemini(image_bytes, mime_type, safe_hint, 'gemini-2.5-flash')
+            provider_suffix = " (※Flash)"
+        except Exception as e:
+            print(f"→ Gemini Flash 失敗詳細: {str(e)}")
 
     # 5. Cloudflare Workers AI
-    try:
-        print("[5番手: Cloudflare] 試行中...")
-        data = await try_cloudflare(image_bytes, safe_hint)
-        return {"success": True, "reason": data.get("reason") + " (※Cloudflare)", "query_used": data.get("query_used"), "location": data.get("location"), "lat": float(data.get("lat")), "lng": float(data.get("lng"))}
-    except Exception as e:
-        print(f"→ Cloudflare 失敗詳細: {str(e)}")
+    if not data:
+        try:
+            print("[5番手: Cloudflare] 試行中...")
+            data = await try_cloudflare(image_bytes, safe_hint)
+            provider_suffix = " (※Cloudflare)"
+        except Exception as e:
+            print(f"→ Cloudflare 失敗詳細: {str(e)}")
+
+    # いずれかのAIで解析が成功した場合、GeoSeerで空間情報を補強する
+    if data:
+        data = await enhance_with_geoseer(data)
+        return {
+            "success": True, 
+            "reason": data.get("reason", "") + provider_suffix, 
+            "query_used": data.get("query_used"), 
+            "location": data.get("location"), 
+            "lat": float(data.get("lat", 35.6895)), 
+            "lng": float(data.get("lng", 139.6917))
+        }
 
     return {
         "success": False, 
